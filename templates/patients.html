@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}Patients — MediOptim Pro{% endblock %}
+{% block page_title %}Patients{% endblock %}
+{% block page_subtitle %}Manage patient records and priority assignments{% endblock %}
+{% block header_actions %}
+<button class="btn btn-primary" onclick="Modal.open('add-modal')">➕ Add Patient</button>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="toolbar-left">
+    <div class="search-bar" style="min-width:280px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search patients by name..." oninput="filterPatients()">
+    </div>
+    <select class="form-control" id="priority-filter" onchange="filterPatients()" style="width:auto;padding:8px 14px">
+      <option value="">All Priorities</option>
+      <option value="critical">Critical</option>
+      <option value="urgent">Urgent</option>
+      <option value="normal">Normal</option>
+      <option value="low">Low</option>
+    </select>
+  </div>
+  <div class="toolbar-right">
+    <span class="text-muted" id="patient-count" style="font-size:13px"></span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table id="patients-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Patient</th>
+          <th>Age / Gender</th>
+          <th>Priority</th>
+          <th>Specialization</th>
+          <th>Preferred Date</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="patients-body">
+        <tr><td colspan="8"><div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">Loading...</div></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add/Edit Modal -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">➕ Add New Patient</div>
+      <button class="modal-close" onclick="Modal.close('add-modal')">✕</button>
+    </div>
+    <form id="patient-form" onsubmit="savePatient(event)">
+      <input type="hidden" id="patient-id">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Full Name *</label>
+          <input class="form-control" id="p-name" placeholder="e.g. John Smith" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Age *</label>
+          <input class="form-control" id="p-age" type="number" min="0" max="120" placeholder="e.g. 35" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Gender *</label>
+          <select class="form-control" id="p-gender" required>
+            <option value="">Select...</option>
+            <option>Male</option><option>Female</option><option>Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Priority Level *</label>
+          <select class="form-control" id="p-priority" required>
+            <option value="">Select...</option>
+            <option value="critical">🔴 Critical</option>
+            <option value="urgent">🟠 Urgent</option>
+            <option value="normal">🟢 Normal</option>
+            <option value="low">⚪ Low</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Required Specialization *</label>
+          <select class="form-control" id="p-spec" required>
+            <option value="">Select...</option>
+            <option>Cardiology</option><option>Neurology</option>
+            <option>Orthopedics</option><option>Pediatrics</option>
+            <option>General Surgery</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Preferred Date</label>
+          <input class="form-control" id="p-date" type="date">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Condition Description</label>
+        <textarea class="form-control" id="p-condition" rows="3" placeholder="Describe the patient's condition..."></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('add-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="save-btn">💾 Save Patient</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allPatients = [];
+
+async function loadPatients() {
+  try {
+    allPatients = await API.get('/api/patients');
+    renderPatients(allPatients);
+  } catch(e) {
+    ToastManager.show('Failed to load patients', 'error');
+  }
+}
+
+function renderPatients(patients) {
+  document.getElementById('patient-count').textContent = `${patients.length} patient${patients.length !== 1 ? 's' : ''}`;
+  const tbody = document.getElementById('patients-body');
+  if (!patients.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
+      <div class="empty-icon">🧑‍⚕️</div>
+      <div class="empty-title">No patients found</div>
+      <div class="empty-desc">Add a new patient to get started</div>
+    </div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = patients.map((p, i) => `
+    <tr>
+      <td><span class="text-muted">${i+1}</span></td>
+      <td>
+        <div style="font-weight:600">${p.name}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${p.condition_description?.substring(0,50) || '—'}${p.condition_description?.length > 50 ? '...' : ''}</div>
+      </td>
+      <td>${p.age} / ${p.gender}</td>
+      <td>${priorityBadge(p.priority)}</td>
+      <td><span style="color:var(--accent)">${p.required_specialization}</span></td>
+      <td>${p.preferred_date || '—'}</td>
+      <td>${statusBadge(p.appointment_status)}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="editPatient(${p.id})">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePatient(${p.id},'${p.name}')">🗑️</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function filterPatients() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  const pr = document.getElementById('priority-filter').value;
+  const filtered = allPatients.filter(p =>
+    p.name.toLowerCase().includes(q) &&
+    (!pr || p.priority === pr)
+  );
+  renderPatients(filtered);
+}
+
+function editPatient(id) {
+  const p = allPatients.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('patient-id').value = p.id;
+  document.getElementById('modal-title').textContent = '✏️ Edit Patient';
+  document.getElementById('p-name').value = p.name;
+  document.getElementById('p-age').value = p.age;
+  document.getElementById('p-gender').value = p.gender;
+  document.getElementById('p-priority').value = p.priority;
+  document.getElementById('p-spec').value = p.required_specialization;
+  document.getElementById('p-date').value = p.preferred_date;
+  document.getElementById('p-condition').value = p.condition_description;
+  Modal.open('add-modal');
+}
+
+async function savePatient(e) {
+  e.preventDefault();
+  const pid = document.getElementById('patient-id').value;
+  const payload = {
+    name: document.getElementById('p-name').value,
+    age: parseInt(document.getElementById('p-age').value),
+    gender: document.getElementById('p-gender').value,
+    priority: document.getElementById('p-priority').value,
+    required_specialization: document.getElementById('p-spec').value,
+    preferred_date: document.getElementById('p-date').value,
+    condition_description: document.getElementById('p-condition').value
+  };
+  try {
+    Spinner.show('Saving patient...');
+    if (pid) {
+      await API.put(`/api/patients/${pid}`, payload);
+      ToastManager.show('Patient updated successfully!', 'success');
+    } else {
+      await API.post('/api/patients', payload);
+      ToastManager.show('Patient added successfully!', 'success');
+    }
+    Modal.close('add-modal');
+    document.getElementById('patient-form').reset();
+    document.getElementById('patient-id').value = '';
+    document.getElementById('modal-title').textContent = '➕ Add New Patient';
+    await loadPatients();
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+  } finally { Spinner.hide(); }
+}
+
+async function deletePatient(id, name) {
+  confirmAction(`Delete patient "${name}"? This will also remove their appointments.`, async () => {
+    try {
+      await API.delete(`/api/patients/${id}`);
+      ToastManager.show('Patient deleted.', 'success');
+      await loadPatients();
+    } catch(e) { ToastManager.show('Delete failed', 'error'); }
+  });
+}
+
+// Set today's date as default for date input
+document.getElementById('p-date').value = todayISO();
+loadPatients();
+</script>
+{% endblock %}

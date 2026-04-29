@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Rooms — MediOptim Pro{% endblock %}
+{% block page_title %}Rooms{% endblock %}
+{% block page_subtitle %}Manage hospital rooms and capacity{% endblock %}
+{% block header_actions %}
+<button class="btn btn-primary" onclick="openAddRoom()">➕ Add Room</button>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="toolbar-left">
+    <div class="search-bar" style="min-width:250px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search rooms..." oninput="filterRooms()">
+    </div>
+    <select class="form-control" id="type-filter" onchange="filterRooms()" style="width:auto;padding:8px 14px">
+      <option value="">All Types</option>
+      <option>consultation</option><option>surgery</option><option>icu</option><option>ward</option>
+    </select>
+  </div>
+  <div class="toolbar-right">
+    <span class="text-muted" id="room-count" style="font-size:13px"></span>
+  </div>
+</div>
+
+<div id="rooms-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px"></div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="room-modal">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <div class="modal-title" id="room-modal-title">➕ Add Room</div>
+      <button class="modal-close" onclick="Modal.close('room-modal')">✕</button>
+    </div>
+    <form id="room-form" onsubmit="saveRoom(event)">
+      <input type="hidden" id="room-id">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Room Number *</label>
+          <input class="form-control" id="r-number" placeholder="e.g. C-103" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Department *</label>
+          <select class="form-control" id="r-dept" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Room Type</label>
+          <select class="form-control" id="r-type">
+            <option value="consultation">Consultation</option>
+            <option value="surgery">Surgery</option>
+            <option value="icu">ICU</option>
+            <option value="ward">Ward</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Capacity</label>
+          <input class="form-control" id="r-capacity" type="number" min="1" value="1">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('room-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">💾 Save Room</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allRooms = [], depts = [];
+
+async function loadAll() {
+  [allRooms, depts] = await Promise.all([API.get('/api/rooms'), API.get('/api/departments')]);
+  const deptSel = document.getElementById('r-dept');
+  deptSel.innerHTML = depts.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+  renderRooms(allRooms);
+}
+
+const typeEmoji = { consultation:'🩺', surgery:'🔪', icu:'🚨', ward:'🛏️' };
+const typeColor = { consultation:'#1a56db', surgery:'#ef4444', icu:'#f59e0b', ward:'#10b981' };
+
+function renderRooms(rooms) {
+  document.getElementById('room-count').textContent = `${rooms.length} room${rooms.length !== 1 ? 's' : ''}`;
+  const grid = document.getElementById('rooms-grid');
+  if (!rooms.length) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🚪</div><div class="empty-title">No rooms found</div></div>`;
+    return;
+  }
+  grid.innerHTML = rooms.map(r => {
+    const color = typeColor[r.room_type] || '#1a56db';
+    const emoji = typeEmoji[r.room_type] || '🚪';
+    return `
+    <div class="card" style="border-top:3px solid ${color};text-align:center">
+      <div style="font-size:36px;margin-bottom:8px">${emoji}</div>
+      <div style="font-size:22px;font-weight:800;color:var(--text-primary)">${r.room_number}</div>
+      <div style="font-size:12px;color:${color};margin:4px 0 12px;text-transform:capitalize">${r.room_type}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">🏢 ${r.department_name}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">👥 Capacity: ${r.capacity}</div>
+      <div style="display:flex;gap:6px;justify-content:center">
+        <button class="btn btn-outline btn-sm" onclick="editRoom(${r.id})">✏️ Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRoom(${r.id},'${r.room_number}')">🗑️</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterRooms() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  const t = document.getElementById('type-filter').value;
+  renderRooms(allRooms.filter(r =>
+    (r.room_number.toLowerCase().includes(q) || r.department_name.toLowerCase().includes(q)) &&
+    (!t || r.room_type === t)
+  ));
+}
+
+function openAddRoom() {
+  document.getElementById('room-id').value = '';
+  document.getElementById('room-modal-title').textContent = '➕ Add Room';
+  document.getElementById('room-form').reset();
+  Modal.open('room-modal');
+}
+
+function editRoom(id) {
+  const r = allRooms.find(x => x.id === id);
+  if (!r) return;
+  document.getElementById('room-id').value = r.id;
+  document.getElementById('room-modal-title').textContent = '✏️ Edit Room';
+  document.getElementById('r-number').value = r.room_number;
+  document.getElementById('r-dept').value = r.department_id;
+  document.getElementById('r-type').value = r.room_type;
+  document.getElementById('r-capacity').value = r.capacity;
+  Modal.open('room-modal');
+}
+
+async function saveRoom(e) {
+  e.preventDefault();
+  const rid = document.getElementById('room-id').value;
+  const payload = {
+    room_number: document.getElementById('r-number').value,
+    department_id: parseInt(document.getElementById('r-dept').value),
+    room_type: document.getElementById('r-type').value,
+    capacity: parseInt(document.getElementById('r-capacity').value)
+  };
+  try {
+    Spinner.show();
+    if (rid) await API.put(`/api/rooms/${rid}`, payload);
+    else await API.post('/api/rooms', payload);
+    ToastManager.show('Room saved!', 'success');
+    Modal.close('room-modal');
+    await loadAll();
+  } catch(e) { ToastManager.show(e.message, 'error'); }
+  finally { Spinner.hide(); }
+}
+
+async function deleteRoom(id, num) {
+  confirmAction(`Delete room ${num}?`, async () => {
+    try {
+      await API.delete(`/api/rooms/${id}`);
+      ToastManager.show('Room deleted.', 'success');
+      await loadAll();
+    } catch(e) { ToastManager.show('Delete failed', 'error'); }
+  });
+}
+
+loadAll();
+</script>
+{% endblock %}

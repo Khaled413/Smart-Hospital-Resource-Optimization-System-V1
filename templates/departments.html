@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Departments — MediOptim Pro{% endblock %}
+{% block page_title %}Departments{% endblock %}
+{% block page_subtitle %}Hospital department overview and capacity{% endblock %}
+
+{% block content %}
+<div id="dept-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const deptColors = ['#1a56db','#ef4444','#10b981','#8b5cf6','#06b6d4'];
+const deptEmojis = ['❤️','🧠','🦴','👶','⚕️'];
+
+async function loadDepts() {
+  const [depts, doctors, rooms] = await Promise.all([
+    API.get('/api/departments'), API.get('/api/doctors'), API.get('/api/rooms')
+  ]);
+  const grid = document.getElementById('dept-grid');
+  grid.innerHTML = depts.map((d, i) => {
+    const color = deptColors[i % deptColors.length];
+    const emoji = deptEmojis[i % deptEmojis.length];
+    const utilPct = Math.round((d.doctor_count / Math.max(d.capacity * 0.2, 1)) * 100);
+    return `
+    <div class="card" style="border-left:4px solid ${color}">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+        <div style="width:54px;height:54px;background:${color}20;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0">${emoji}</div>
+        <div>
+          <div style="font-size:17px;font-weight:700">${d.name}</div>
+          <div style="font-size:12px;color:var(--text-muted)">${d.description || 'Hospital Department'}</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+        <div style="background:var(--bg-dark);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:${color}">${d.capacity}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">CAPACITY</div>
+        </div>
+        <div style="background:var(--bg-dark);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:var(--text-primary)">${d.doctor_count}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">DOCTORS</div>
+        </div>
+        <div style="background:var(--bg-dark);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:var(--text-primary)">${d.room_count}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">ROOMS</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px">Staff Load</div>
+      <div class="progress-bar-wrap"><div class="progress-bar" style="width:${Math.min(utilPct,100)}%;background:${color}"></div></div>
+      <div style="font-size:11px;color:${color};margin-top:4px;text-align:right">${Math.min(utilPct,100)}%</div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Doctors in this department:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${doctors.filter(doc => doc.department_id === d.id).map(doc =>
+            `<span style="background:${color}15;color:${color};border:1px solid ${color}30;padding:3px 8px;border-radius:20px;font-size:11px">${doc.name.replace('Dr. ','')}</span>`
+          ).join('') || '<span style="color:var(--text-muted);font-size:12px">No doctors assigned</span>'}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+loadDepts();
+</script>
+{% endblock %}

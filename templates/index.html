@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — MediOptim Pro{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_subtitle %}Real-time hospital resource overview{% endblock %}
+
+{% block content %}
+<!-- Stats Cards -->
+<div class="stats-grid" id="stats-grid">
+  <div class="stat-card" style="--card-accent:#1a56db;--card-bg:rgba(26,86,219,0.15)">
+    <div class="stat-icon">🧑‍⚕️</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-patients">—</div>
+      <div class="stat-label">Total Patients</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#06b6d4;--card-bg:rgba(6,182,212,0.15)">
+    <div class="stat-icon">👨‍⚕️</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-doctors">—</div>
+      <div class="stat-label">Total Doctors</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#10b981;--card-bg:rgba(16,185,129,0.15)">
+    <div class="stat-icon">🚪</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-rooms">—</div>
+      <div class="stat-label">Total Rooms</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#8b5cf6;--card-bg:rgba(139,92,246,0.15)">
+    <div class="stat-icon">🏢</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-depts">—</div>
+      <div class="stat-label">Departments</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#f59e0b;--card-bg:rgba(245,158,11,0.15)">
+    <div class="stat-icon">📅</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-appts">—</div>
+      <div class="stat-label">Appointments Today</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#ef4444;--card-bg:rgba(239,68,68,0.15)">
+    <div class="stat-icon">⏱️</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-wait">—</div>
+      <div class="stat-label">Avg Wait (min)</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#10b981;--card-bg:rgba(16,185,129,0.15)">
+    <div class="stat-icon">📊</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-util">—</div>
+      <div class="stat-label">Utilization Rate</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Row -->
+<div class="grid-3">
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Patient Priority Distribution</div>
+        <div class="card-subtitle">Current queue breakdown</div>
+      </div>
+    </div>
+    <div class="chart-container">
+      <canvas id="priorityChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Department Workload</div>
+        <div class="card-subtitle">Appointments by department</div>
+      </div>
+    </div>
+    <div class="chart-container">
+      <canvas id="deptChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Doctor Utilization</div>
+        <div class="card-subtitle">Today's booking rate</div>
+      </div>
+    </div>
+    <div class="chart-container">
+      <canvas id="doctorChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card mt-4">
+  <div class="card-header">
+    <div class="card-title">⚡ Quick Actions</div>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <a href="/patients" class="btn btn-primary">🧑‍⚕️ Manage Patients</a>
+    <a href="/optimize" class="btn btn-success">🔀 Run Optimization</a>
+    <a href="/appointments" class="btn btn-outline">📅 View Appointments</a>
+    <a href="/analytics" class="btn btn-outline">📈 Analytics</a>
+    <a href="/history" class="btn btn-outline">🕓 Run History</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let priorityChart, deptChart, doctorChart;
+
+const chartDefaults = {
+  plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'Inter', size: 11 } } } },
+  scales: {}
+};
+
+async function loadDashboard() {
+  try {
+    const data = await API.get('/api/dashboard');
+
+    document.getElementById('stat-patients').textContent = data.total_patients;
+    document.getElementById('stat-doctors').textContent = data.total_doctors;
+    document.getElementById('stat-rooms').textContent = data.total_rooms;
+    document.getElementById('stat-depts').textContent = data.total_departments;
+    document.getElementById('stat-appts').textContent = data.appointments_today;
+    document.getElementById('stat-wait').textContent = data.avg_wait_time + ' min';
+    document.getElementById('stat-util').textContent = data.utilization_rate + '%';
+
+    buildPriorityChart(data.priority_distribution);
+    buildDeptChart(data.department_workload);
+    buildDoctorChart(data.doctor_utilization);
+  } catch(e) {
+    ToastManager.show('Failed to load dashboard data', 'error');
+  }
+}
+
+function buildPriorityChart(dist) {
+  const labels = Object.keys(dist);
+  const values = Object.values(dist);
+  const colors = labels.map(l => PRIORITY_COLORS[l] || '#64748b');
+
+  if (priorityChart) priorityChart.destroy();
+  priorityChart = new Chart(document.getElementById('priorityChart'), {
+    type: 'doughnut',
+    data: {
+      labels: labels.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
+      datasets: [{ data: values, backgroundColor: colors, borderWidth: 2, borderColor: '#0f2044' }]
+    },
+    options: {
+      ...chartDefaults,
+      cutout: '65%',
+      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } } }
+    }
+  });
+}
+
+function buildDeptChart(workload) {
+  const labels = Object.keys(workload);
+  const values = Object.values(workload);
+  if (deptChart) deptChart.destroy();
+  deptChart = new Chart(document.getElementById('deptChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Appointments',
+        data: values,
+        backgroundColor: 'rgba(26,86,219,0.7)',
+        borderColor: '#1a56db',
+        borderWidth: 1,
+        borderRadius: 6
+      }]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+function buildDoctorChart(utilData) {
+  const labels = utilData.map(d => d.name.replace('Dr. ', ''));
+  const values = utilData.map(d => d.utilization);
+  if (doctorChart) doctorChart.destroy();
+  doctorChart = new Chart(document.getElementById('doctorChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Utilization %',
+        data: values,
+        backgroundColor: values.map(v => v > 80 ? '#ef4444' : v > 50 ? '#f59e0b' : '#10b981'),
+        borderRadius: 6,
+        borderWidth: 0
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      ...chartDefaults,
+      scales: {
+        x: { max: 100, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+loadDashboard();
+</script>
+{% endblock %}

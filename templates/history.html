@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Run History — MediOptim Pro{% endblock %}
+{% block page_title %}Optimization Run History{% endblock %}
+{% block page_subtitle %}Historical log of all optimization executions{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="toolbar-left">
+    <select class="form-control" id="algo-filter" onchange="filterRuns()" style="width:auto;padding:8px 14px">
+      <option value="">All Algorithms</option>
+      <option value="greedy">Greedy</option>
+      <option value="lp">Linear Programming</option>
+      <option value="hybrid">Hybrid</option>
+    </select>
+    <select class="form-control" id="status-filter" onchange="filterRuns()" style="width:auto;padding:8px 14px">
+      <option value="">All Statuses</option>
+      <option value="success">Success</option>
+      <option value="partial">Partial</option>
+      <option value="failed">Failed</option>
+    </select>
+  </div>
+  <div class="toolbar-right">
+    <span class="text-muted" id="run-count" style="font-size:13px"></span>
+    <a href="/optimize" class="btn btn-primary btn-sm">⚡ New Run</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Algorithm</th>
+          <th>Date</th>
+          <th>Total</th>
+          <th>Assigned</th>
+          <th>Unassigned</th>
+          <th>Avg Wait</th>
+          <th>Utilization</th>
+          <th>Status</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody id="history-body">
+        <tr><td colspan="10"><div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">Loading...</div></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Log Detail Modal -->
+<div class="modal-overlay" id="log-modal">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-header">
+      <div class="modal-title">🖥️ Solver Log — Run <span id="log-run-id"></span></div>
+      <button class="modal-close" onclick="Modal.close('log-modal')">✕</button>
+    </div>
+    <div class="log-console" id="log-content" style="max-height:500px"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allRuns = [];
+
+async function loadHistory() {
+  try {
+    allRuns = await API.get('/api/optimization-runs');
+    filterRuns();
+  } catch(e) { ToastManager.show('Failed to load history','error'); }
+}
+
+function filterRuns() {
+  const algo = document.getElementById('algo-filter').value;
+  const st = document.getElementById('status-filter').value;
+  const filtered = allRuns.filter(r =>
+    (!algo || r.algorithm === algo) && (!st || r.status === st)
+  );
+  renderRuns(filtered);
+}
+
+function renderRuns(runs) {
+  document.getElementById('run-count').textContent = `${runs.length} run${runs.length !== 1 ? 's' : ''}`;
+  const tbody = document.getElementById('history-body');
+  if (!runs.length) {
+    tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state">
+      <div class="empty-icon">🔄</div>
+      <div class="empty-title">No optimization runs yet</div>
+      <div class="empty-desc">Go to the Optimization page to run your first schedule.</div>
+      <a href="/optimize" class="btn btn-primary btn-sm" style="margin-top:12px">⚡ Run Optimization</a>
+    </div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = runs.map((r, i) => {
+    const assignPct = r.total_patients > 0 ? Math.round((r.assigned_patients / r.total_patients) * 100) : 0;
+    return `
+    <tr>
+      <td><span class="text-muted">${i+1}</span></td>
+      <td>${algoBadge(r.algorithm)}</td>
+      <td>
+        <div style="font-size:13px">${r.run_date}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${new Date(r.created_at).toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'})}</div>
+      </td>
+      <td style="font-weight:700">${r.total_patients}</td>
+      <td style="color:#10b981;font-weight:700">${r.assigned_patients}</td>
+      <td style="color:${r.unassigned_patients > 0 ? '#ef4444' : '#94a3b8'};font-weight:700">${r.unassigned_patients}</td>
+      <td><span style="color:${r.avg_wait_time > 60 ? '#ef4444' : '#f59e0b'}">${r.avg_wait_time} min</span></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="progress-bar-wrap" style="width:80px">
+            <div class="progress-bar" style="width:${r.utilization_rate}%"></div>
+          </div>
+          <span style="font-size:12px;color:var(--text-muted)">${r.utilization_rate}%</span>
+        </div>
+      </td>
+      <td>${statusBadge(r.status)}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="showLog(${r.id})">📋 Log</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function showLog(id) {
+  const run = allRuns.find(r => r.id === id);
+  if (!run) return;
+  document.getElementById('log-run-id').textContent = id;
+  const lines = (run.solver_log || 'No log available.').split('\n');
+  document.getElementById('log-content').innerHTML = lines.map(line => {
+    const cls = line.includes('✗') || line.includes('Error') ? 'log-error' :
+                line.includes('[LP]') ? 'log-info' :
+                line.includes('[HYBRID]') ? 'log-warn' : '';
+    return `<div class="${cls}">${line || '&nbsp;'}</div>`;
+  }).join('');
+  Modal.open('log-modal');
+}
+
+loadHistory();
+</script>
+{% endblock %}

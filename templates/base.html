@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Smart Hospital Optimizer{% endblock %}</title>
+  <meta name="description" content="Smart Hospital Resource Optimization System - AI-powered scheduling and resource allocation">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">🏥</div>
+    <div class="logo-text">
+      <span class="app-name">MediOptim Pro</span>
+      <span class="app-sub">Hospital Resource System</span>
+    </div>
+  </div>
+
+  <div class="sidebar-nav">
+    <div class="nav-section-title">Overview</div>
+    <a class="nav-item" href="/"><span class="nav-icon">📊</span> Dashboard</a>
+    <a class="nav-item" href="/analytics"><span class="nav-icon">📈</span> Analytics</a>
+
+    <div class="nav-section-title">Resources</div>
+    <a class="nav-item" href="/patients"><span class="nav-icon">🧑‍⚕️</span> Patients</a>
+    <a class="nav-item" href="/doctors"><span class="nav-icon">👨‍⚕️</span> Doctors</a>
+    <a class="nav-item" href="/rooms"><span class="nav-icon">🚪</span> Rooms</a>
+    <a class="nav-item" href="/departments"><span class="nav-icon">🏢</span> Departments</a>
+
+    <div class="nav-section-title">Scheduling</div>
+    <a class="nav-item" href="/appointments"><span class="nav-icon">📅</span> Appointments</a>
+    <a class="nav-item" href="/optimize"><span class="nav-icon">⚡</span> Optimization</a>
+    <a class="nav-item" href="/history"><span class="nav-icon">🕓</span> Run History</a>
+  </div>
+
+  <div class="sidebar-footer">
+    <div style="font-size:10px;color:var(--text-muted);">Smart Hospital Optimizer v1.0</div>
+  </div>
+</nav>
+
+<!-- Main Content -->
+<div class="main-content">
+  <!-- Top Header -->
+  <header class="top-header">
+    <div>
+      <div class="page-title">{% block page_title %}Dashboard{% endblock %}</div>
+      <div class="page-subtitle">{% block page_subtitle %}Real-time hospital resource overview{% endblock %}</div>
+    </div>
+    <div class="header-actions">
+      <div class="header-date" id="current-date"></div>
+      {% block header_actions %}{% endblock %}
+    </div>
+  </header>
+
+  <!-- Page Content -->
+  <main class="page-body">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="/static/js/app.js"></script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

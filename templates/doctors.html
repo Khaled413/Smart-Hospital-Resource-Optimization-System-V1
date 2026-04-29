@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}Doctors — MediOptim Pro{% endblock %}
+{% block page_title %}Doctors{% endblock %}
+{% block page_subtitle %}Manage medical staff and availability{% endblock %}
+{% block header_actions %}
+<button class="btn btn-primary" onclick="openAdd()">➕ Add Doctor</button>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="toolbar-left">
+    <div class="search-bar" style="min-width:280px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search doctors..." oninput="filterDoctors()">
+    </div>
+    <select class="form-control" id="spec-filter" onchange="filterDoctors()" style="width:auto;padding:8px 14px">
+      <option value="">All Specializations</option>
+      <option>Cardiology</option><option>Neurology</option>
+      <option>Orthopedics</option><option>Pediatrics</option><option>General Surgery</option>
+    </select>
+  </div>
+  <div class="toolbar-right">
+    <span class="text-muted" id="doctor-count" style="font-size:13px"></span>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div id="doctor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;grid-column:1/-1"></div>
+</div>
+
+<!-- Add/Edit Modal -->
+<div class="modal-overlay" id="doc-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="doc-modal-title">➕ Add Doctor</div>
+      <button class="modal-close" onclick="Modal.close('doc-modal')">✕</button>
+    </div>
+    <form id="doc-form" onsubmit="saveDoctor(event)">
+      <input type="hidden" id="doc-id">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Full Name *</label>
+          <input class="form-control" id="d-name" placeholder="Dr. John Smith" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Specialization *</label>
+          <select class="form-control" id="d-spec" required>
+            <option value="">Select...</option>
+            <option>Cardiology</option><option>Neurology</option>
+            <option>Orthopedics</option><option>Pediatrics</option><option>General Surgery</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Department *</label>
+          <select class="form-control" id="d-dept" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Patients/Day</label>
+          <input class="form-control" id="d-max" type="number" min="1" max="50" value="10">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Available From</label>
+          <input class="form-control" id="d-from" type="time" value="08:00">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Available Until</label>
+          <input class="form-control" id="d-until" type="time" value="17:00">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('doc-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">💾 Save Doctor</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allDoctors = [], depts = [];
+
+async function loadAll() {
+  [allDoctors, depts] = await Promise.all([API.get('/api/doctors'), API.get('/api/departments')]);
+  const deptSel = document.getElementById('d-dept');
+  deptSel.innerHTML = depts.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+  renderDoctors(allDoctors);
+}
+
+function renderDoctors(doctors) {
+  document.getElementById('doctor-count').textContent = `${doctors.length} doctor${doctors.length !== 1 ? 's' : ''}`;
+  const grid = document.getElementById('doctor-cards-grid');
+  if (!doctors.length) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">👨‍⚕️</div><div class="empty-title">No doctors found</div></div>`;
+    return;
+  }
+  const specColors = {Cardiology:'#ef4444',Neurology:'#8b5cf6',Orthopedics:'#f59e0b',Pediatrics:'#10b981','General Surgery':'#06b6d4'};
+  grid.innerHTML = doctors.map(d => {
+    const color = specColors[d.specialization] || '#1a56db';
+    const slots = Math.floor((toMin(d.available_until) - toMin(d.available_from)) / 30);
+    const util = Math.round((d.appointments_today / d.max_patients_per_day) * 100);
+    return `
+    <div class="card" style="border-top:3px solid ${color}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-weight:700;font-size:15px">${d.name}</div>
+          <div style="font-size:12px;color:${color};margin-top:2px">${d.specialization}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-outline btn-sm" onclick="editDoctor(${d.id})">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteDoctor(${d.id},'${d.name}')">🗑️</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">🏢 ${d.department_name}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:14px">
+        <div style="background:var(--bg-dark);padding:8px;border-radius:6px">
+          <div style="color:var(--text-muted)">Max/Day</div>
+          <div style="font-weight:700;color:var(--text-primary)">${d.max_patients_per_day}</div>
+        </div>
+        <div style="background:var(--bg-dark);padding:8px;border-radius:6px">
+          <div style="color:var(--text-muted)">Total Slots</div>
+          <div style="font-weight:700;color:var(--text-primary)">${slots}</div>
+        </div>
+        <div style="background:var(--bg-dark);padding:8px;border-radius:6px">
+          <div style="color:var(--text-muted)">Hours</div>
+          <div style="font-weight:700;color:var(--text-primary)">${d.available_from} - ${d.available_until}</div>
+        </div>
+        <div style="background:var(--bg-dark);padding:8px;border-radius:6px">
+          <div style="color:var(--text-muted)">Today</div>
+          <div style="font-weight:700;color:var(--text-primary)">${d.appointments_today} appts</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Utilization Today: ${util}%</div>
+      <div class="progress-bar-wrap"><div class="progress-bar" style="width:${Math.min(util,100)}%;background:${util>80?'#ef4444':util>50?'#f59e0b':'#10b981'}"></div></div>
+    </div>`;
+  }).join('');
+}
+
+function toMin(t) { const [h,m] = t.split(':'); return +h*60 + +m; }
+
+function filterDoctors() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  const sp = document.getElementById('spec-filter').value;
+  renderDoctors(allDoctors.filter(d =>
+    d.name.toLowerCase().includes(q) && (!sp || d.specialization === sp)
+  ));
+}
+
+function openAdd() {
+  document.getElementById('doc-id').value = '';
+  document.getElementById('doc-modal-title').textContent = '➕ Add Doctor';
+  document.getElementById('doc-form').reset();
+  Modal.open('doc-modal');
+}
+
+function editDoctor(id) {
+  const d = allDoctors.find(x => x.id === id);
+  if (!d) return;
+  document.getElementById('doc-id').value = d.id;
+  document.getElementById('doc-modal-title').textContent = '✏️ Edit Doctor';
+  document.getElementById('d-name').value = d.name;
+  document.getElementById('d-spec').value = d.specialization;
+  document.getElementById('d-dept').value = d.department_id;
+  document.getElementById('d-max').value = d.max_patients_per_day;
+  document.getElementById('d-from').value = d.available_from;
+  document.getElementById('d-until').value = d.available_until;
+  Modal.open('doc-modal');
+}
+
+async function saveDoctor(e) {
+  e.preventDefault();
+  const did = document.getElementById('doc-id').value;
+  const payload = {
+    name: document.getElementById('d-name').value,
+    specialization: document.getElementById('d-spec').value,
+    department_id: parseInt(document.getElementById('d-dept').value),
+    max_patients_per_day: parseInt(document.getElementById('d-max').value),
+    available_from: document.getElementById('d-from').value,
+    available_until: document.getElementById('d-until').value
+  };
+  try {
+    Spinner.show();
+    if (did) await API.put(`/api/doctors/${did}`, payload);
+    else await API.post('/api/doctors', payload);
+    ToastManager.show('Doctor saved!', 'success');
+    Modal.close('doc-modal');
+    await loadAll();
+  } catch(e) { ToastManager.show(e.message, 'error'); }
+  finally { Spinner.hide(); }
+}
+
+async function deleteDoctor(id, name) {
+  confirmAction(`Delete Dr. ${name}?`, async () => {
+    try {
+      await API.delete(`/api/doctors/${id}`);
+      ToastManager.show('Doctor deleted.', 'success');
+      await loadAll();
+    } catch(e) { ToastManager.show('Delete failed', 'error'); }
+  });
+}
+
+loadAll();
+</script>
+{% endblock %}

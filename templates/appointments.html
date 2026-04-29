@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Appointments — MediOptim Pro{% endblock %}
+{% block page_title %}Appointments{% endblock %}
+{% block page_subtitle %}View and manage scheduled appointments{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="toolbar-left">
+    <div class="search-bar" style="min-width:260px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search by patient or doctor..." oninput="filterAppts()">
+    </div>
+    <select class="form-control" id="status-filter" onchange="filterAppts()" style="width:auto;padding:8px 14px">
+      <option value="">All Statuses</option>
+      <option value="scheduled">Scheduled</option>
+      <option value="completed">Completed</option>
+      <option value="cancelled">Cancelled</option>
+    </select>
+    <input type="date" class="form-control" id="date-filter" onchange="filterAppts()" style="width:auto;padding:8px 14px">
+  </div>
+  <div class="toolbar-right">
+    <span class="text-muted" id="appt-count" style="font-size:13px"></span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table id="appts-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Patient</th>
+          <th>Priority</th>
+          <th>Doctor</th>
+          <th>Room</th>
+          <th>Date</th>
+          <th>Time</th>
+          <th>Wait</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="appts-body">
+        <tr><td colspan="10"><div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">Loading...</div></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allAppts = [];
+
+async function loadAppts() {
+  try {
+    allAppts = await API.get('/api/appointments');
+    // Default: filter by today
+    document.getElementById('date-filter').value = todayISO();
+    filterAppts();
+  } catch(e) { ToastManager.show('Failed to load appointments','error'); }
+}
+
+function filterAppts() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  const st = document.getElementById('status-filter').value;
+  const dt = document.getElementById('date-filter').value;
+  const filtered = allAppts.filter(a =>
+    (a.patient_name.toLowerCase().includes(q) || a.doctor_name.toLowerCase().includes(q)) &&
+    (!st || a.status === st) &&
+    (!dt || a.date === dt)
+  );
+  renderAppts(filtered);
+}
+
+function renderAppts(appts) {
+  document.getElementById('appt-count').textContent = `${appts.length} appointment${appts.length !== 1 ? 's' : ''}`;
+  const tbody = document.getElementById('appts-body');
+  if (!appts.length) {
+    tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state">
+      <div class="empty-icon">📅</div>
+      <div class="empty-title">No appointments found</div>
+      <div class="empty-desc">Run optimization to generate appointments</div>
+    </div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = appts.map((a, i) => `
+    <tr>
+      <td><span class="text-muted">${i+1}</span></td>
+      <td><div style="font-weight:600">${a.patient_name}</div></td>
+      <td>${priorityBadge(a.patient_priority)}</td>
+      <td>
+        <div style="font-weight:500">${a.doctor_name}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${a.doctor_specialization}</div>
+      </td>
+      <td><span style="color:var(--accent)">${a.room_number}</span></td>
+      <td>${a.date}</td>
+      <td style="font-size:12px">${formatTime(a.start_time)} – ${formatTime(a.end_time)}</td>
+      <td><span style="color:${a.waiting_time > 60 ? '#ef4444' : a.waiting_time > 30 ? '#f59e0b' : '#10b981'}">${a.waiting_time} min</span></td>
+      <td>${statusBadge(a.status)}</td>
+      <td>
+        <select class="form-control" style="width:auto;padding:4px 8px;font-size:12px"
+          onchange="updateStatus(${a.id}, this.value)">
+          <option value="scheduled" ${a.status==='scheduled'?'selected':''}>Scheduled</option>
+          <option value="completed" ${a.status==='completed'?'selected':''}>Completed</option>
+          <option value="cancelled" ${a.status==='cancelled'?'selected':''}>Cancelled</option>
+        </select>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function updateStatus(id, status) {
+  try {
+    await API.patch(`/api/appointments/${id}/status`, { status });
+    ToastManager.show('Status updated!', 'success');
+    const appt = allAppts.find(a => a.id === id);
+    if (appt) appt.status = status;
+    filterAppts();
+  } catch(e) { ToastManager.show('Update failed','error'); }
+}
+
+loadAppts();
+</script>
+{% endblock %}

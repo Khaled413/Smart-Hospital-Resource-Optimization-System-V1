@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% block title %}Optimization Engine — MediOptim Pro{% endblock %}
+{% block page_title %}Optimization Engine{% endblock %}
+{% block page_subtitle %}Run AI-powered scheduling algorithms to allocate hospital resources{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="align-items:start">
+  <!-- Left: Config Panel -->
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">⚙️ Algorithm Selection</div></div>
+      <div class="algo-grid" id="algo-grid">
+        <div class="algo-card selected" data-algo="greedy" onclick="selectAlgo('greedy')">
+          <div class="algo-icon">⚡</div>
+          <div class="algo-name">Greedy</div>
+          <div class="algo-desc">Fast, priority-based scheduling. Best for large datasets.</div>
+        </div>
+        <div class="algo-card" data-algo="lp" onclick="selectAlgo('lp')">
+          <div class="algo-icon">🔢</div>
+          <div class="algo-name">Linear Programming</div>
+          <div class="algo-desc">Optimal via PuLP solver. Minimizes weighted wait time.</div>
+        </div>
+        <div class="algo-card" data-algo="hybrid" onclick="selectAlgo('hybrid')">
+          <div class="algo-icon">🔀</div>
+          <div class="algo-name">Hybrid</div>
+          <div class="algo-desc">LP for critical/urgent, Greedy for normal/low patients.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">📅 Scheduling Options</div></div>
+      <div class="form-group">
+        <label class="form-label">Target Date</label>
+        <input class="form-control" id="opt-date" type="date">
+      </div>
+      <div class="form-group" style="display:flex;align-items:center;gap:10px;margin-bottom:0">
+        <input type="checkbox" id="clear-existing" style="width:16px;height:16px;accent-color:var(--primary)">
+        <label for="clear-existing" style="font-size:13px;color:var(--text-secondary);cursor:pointer">
+          Clear existing appointments for this date before running
+        </label>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">📋 Queue Summary</div></div>
+      <div id="queue-summary" style="font-size:13px;color:var(--text-muted)">Loading...</div>
+    </div>
+
+    <button class="btn btn-primary btn-lg w-full" id="run-btn" onclick="runOptimization()" style="justify-content:center">
+      ▶ Run Optimization
+    </button>
+  </div>
+
+  <!-- Right: Results Panel -->
+  <div>
+    <div class="card" id="results-panel" style="display:none;margin-bottom:20px">
+      <div class="card-header">
+        <div class="card-title">📊 Optimization Results</div>
+        <span id="result-algo-badge"></span>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric-box">
+          <div class="metric-val" id="res-total">0</div>
+          <div class="metric-lbl">Total Patients</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-val" id="res-assigned" style="color:#10b981">0</div>
+          <div class="metric-lbl">Assigned</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-val" id="res-unassigned" style="color:#ef4444">0</div>
+          <div class="metric-lbl">Unassigned</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-val" id="res-util" style="color:#06b6d4">0%</div>
+          <div class="metric-lbl">Utilization</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:13px;color:var(--text-muted)">Avg Wait Time</span>
+        <span id="res-wait" style="font-weight:700;color:var(--warning)">— min</span>
+      </div>
+      <div class="progress-bar-wrap" style="margin-bottom:4px">
+        <div class="progress-bar" id="util-bar" style="width:0%"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);text-align:right" id="util-label">0% of total capacity used</div>
+    </div>
+
+    <!-- Unassigned patients -->
+    <div class="card" id="unassigned-panel" style="display:none;margin-bottom:20px">
+      <div class="card-header">
+        <div class="card-title" style="color:#ef4444">⚠️ Unassigned Patients</div>
+        <span id="unassigned-count" class="badge badge-danger"></span>
+      </div>
+      <div id="unassigned-list"></div>
+    </div>
+
+    <!-- Solver Log -->
+    <div class="card" id="log-panel" style="display:none">
+      <div class="card-header">
+        <div class="card-title">🖥️ Solver Log</div>
+        <button class="btn btn-outline btn-sm" onclick="toggleLog()">Toggle</button>
+      </div>
+      <div class="log-console" id="solver-log"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Generated Schedule -->
+<div class="card" id="schedule-panel" style="display:none;margin-top:20px">
+  <div class="card-header">
+    <div class="card-title">📅 Generated Schedule</div>
+    <span id="schedule-count" style="font-size:13px;color:var(--text-muted)"></span>
+  </div>
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Patient</th><th>Priority</th><th>Doctor</th>
+          <th>Room</th><th>Start</th><th>End</th><th>Wait Time</th>
+        </tr>
+      </thead>
+      <tbody id="schedule-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let selectedAlgo = 'greedy';
+document.getElementById('opt-date').value = todayISO();
+
+function selectAlgo(algo) {
+  selectedAlgo = algo;
+  document.querySelectorAll('.algo-card').forEach(c => c.classList.remove('selected'));
+  document.querySelector(`[data-algo="${algo}"]`).classList.add('selected');
+}
+
+async function loadQueueSummary() {
+  try {
+    const patients = await API.get('/api/patients');
+    const counts = { critical: 0, urgent: 0, normal: 0, low: 0 };
+    patients.forEach(p => counts[p.priority] = (counts[p.priority] || 0) + 1);
+    document.getElementById('queue-summary').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${Object.entries(counts).map(([k, v]) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg-dark);border-radius:6px">
+            <span>${priorityBadge(k)}</span>
+            <span style="font-weight:700;font-size:16px">${v}</span>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:10px;font-size:12px;padding:8px 12px;background:var(--bg-dark);border-radius:6px">
+        Total: <strong>${patients.length}</strong> patients in queue
+      </div>`;
+  } catch(e) {}
+}
+
+async function runOptimization() {
+  const date = document.getElementById('opt-date').value;
+  if (!date) { ToastManager.show('Please select a date', 'warning'); return; }
+
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Running...';
+  Spinner.show(`Running ${selectedAlgo.toUpperCase()} algorithm...`);
+
+  try {
+    const result = await API.post('/api/optimize', {
+      algorithm: selectedAlgo,
+      date,
+      clear_existing: document.getElementById('clear-existing').checked
+    });
+    Spinner.hide();
+    showResults(result);
+    ToastManager.show(`✅ Optimization complete! ${result.metrics.assigned} patients assigned.`, 'success');
+  } catch(e) {
+    Spinner.hide();
+    ToastManager.show(`Optimization failed: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Run Optimization';
+  }
+}
+
+function showResults(result) {
+  const m = result.metrics;
+
+  // Results panel
+  document.getElementById('results-panel').style.display = 'block';
+  document.getElementById('result-algo-badge').innerHTML = algoBadge(result.algorithm);
+  document.getElementById('res-total').textContent = m.total;
+  document.getElementById('res-assigned').textContent = m.assigned;
+  document.getElementById('res-unassigned').textContent = m.unassigned;
+  document.getElementById('res-util').textContent = m.utilization_rate + '%';
+  document.getElementById('res-wait').textContent = m.avg_wait_time + ' min';
+  document.getElementById('util-bar').style.width = m.utilization_rate + '%';
+  document.getElementById('util-label').textContent = `${m.utilization_rate}% of total capacity used`;
+
+  // Unassigned
+  const unassignedPanel = document.getElementById('unassigned-panel');
+  if (result.unassigned && result.unassigned.length > 0) {
+    unassignedPanel.style.display = 'block';
+    document.getElementById('unassigned-count').textContent = result.unassigned.length;
+    document.getElementById('unassigned-list').innerHTML = result.unassigned.map(p => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="font-weight:500">${p.name}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--text-muted)">${p.specialization}</span>
+          ${priorityBadge(p.priority)}
+        </div>
+      </div>`).join('');
+  } else {
+    unassignedPanel.style.display = 'none';
+  }
+
+  // Solver log
+  document.getElementById('log-panel').style.display = 'block';
+  document.getElementById('solver-log').innerHTML = result.log.map(line => {
+    const cls = line.includes('✗') || line.includes('Error') ? 'log-error' :
+                line.includes('Done') || line.includes('✓') ? '' :
+                line.includes('[LP]') ? 'log-info' : '';
+    return `<div class="${cls}">${line}</div>`;
+  }).join('');
+
+  // Schedule table
+  document.getElementById('schedule-panel').style.display = 'block';
+  document.getElementById('schedule-count').textContent = `${result.assignments.length} appointments generated`;
+  document.getElementById('schedule-body').innerHTML = result.assignments.map((a, i) => `
+    <tr>
+      <td>${i+1}</td>
+      <td style="font-weight:600">${a.patient_name}</td>
+      <td>${priorityBadge(a.patient_priority)}</td>
+      <td>${a.doctor_name}</td>
+      <td><span style="color:var(--accent)">${a.room_number}</span></td>
+      <td>${formatTime(a.start_time)}</td>
+      <td>${formatTime(a.end_time)}</td>
+      <td><span style="color:${a.waiting_time > 60 ? '#ef4444' : '#10b981'}">${a.waiting_time} min</span></td>
+    </tr>`).join('');
+}
+
+function toggleLog() {
+  const log = document.getElementById('solver-log');
+  log.style.display = log.style.display === 'none' ? 'block' : 'none';
+}
+
+loadQueueSummary();
+</script>
+{% endblock %}

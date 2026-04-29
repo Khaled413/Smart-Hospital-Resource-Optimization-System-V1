@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Analytics — MediOptim Pro{% endblock %}
+{% block page_title %}Analytics{% endblock %}
+{% block page_subtitle %}Performance metrics and optimization insights{% endblock %}
+
+{% block content %}
+<!-- KPI Row -->
+<div id="analytics-kpis" class="stats-grid" style="margin-bottom:28px"></div>
+
+<!-- Charts Row 1 -->
+<div class="grid-2" style="margin-bottom:20px">
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">⏱️ Avg Wait Time by Priority</div>
+        <div class="card-subtitle">Minutes per priority level</div>
+      </div>
+    </div>
+    <div class="chart-container"><canvas id="waitChart"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">👥 Patient Assignment Status</div>
+        <div class="card-subtitle">Assigned vs unassigned patients</div>
+      </div>
+    </div>
+    <div class="chart-container"><canvas id="assignChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Charts Row 2 -->
+<div class="card">
+  <div class="card-header">
+    <div>
+      <div class="card-title">📊 Doctor Utilization Breakdown</div>
+      <div class="card-subtitle">Total appointments per doctor vs capacity</div>
+    </div>
+  </div>
+  <div class="chart-container" style="height:300px"><canvas id="utilChart"></canvas></div>
+</div>
+
+<!-- Optimization Trends -->
+<div class="card" style="margin-top:20px">
+  <div class="card-header">
+    <div>
+      <div class="card-title">📈 Optimization Run Trends</div>
+      <div class="card-subtitle">Historical performance over runs</div>
+    </div>
+  </div>
+  <div class="chart-container" style="height:260px"><canvas id="trendChart"></canvas></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const chartOpts = (extra = {}) => ({
+  responsive: true, maintainAspectRatio: false,
+  plugins: { legend: { labels: { color: '#94a3b8', font: { family:'Inter', size:11 } } } },
+  scales: {
+    x: { ticks: { color: '#64748b', font:{size:10} }, grid: { color: 'rgba(255,255,255,0.05)' } },
+    y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+  },
+  ...extra
+});
+
+async function loadAnalytics() {
+  try {
+    const [waitData, utilData, statusData, runs] = await Promise.all([
+      API.get('/api/analytics/wait-time'),
+      API.get('/api/analytics/utilization'),
+      API.get('/api/analytics/patients-status'),
+      API.get('/api/optimization-runs')
+    ]);
+
+    // KPIs
+    const totalBooked = utilData.reduce((s, d) => s + d.booked, 0);
+    const avgUtil = utilData.length ? Math.round(utilData.reduce((s, d) => s + d.utilization, 0) / utilData.length) : 0;
+    const avgWait = Object.values(waitData).filter(v => v > 0);
+    const overallWait = avgWait.length ? Math.round(avgWait.reduce((s, v) => s + v, 0) / avgWait.length) : 0;
+
+    document.getElementById('analytics-kpis').innerHTML = `
+      <div class="stat-card" style="--card-accent:#1a56db;--card-bg:rgba(26,86,219,0.15)">
+        <div class="stat-icon">📅</div>
+        <div class="stat-info"><div class="stat-value">${totalBooked}</div><div class="stat-label">Total Appointments</div></div>
+      </div>
+      <div class="stat-card" style="--card-accent:#10b981;--card-bg:rgba(16,185,129,0.15)">
+        <div class="stat-icon">✅</div>
+        <div class="stat-info"><div class="stat-value">${statusData.assigned}</div><div class="stat-label">Assigned Patients</div></div>
+      </div>
+      <div class="stat-card" style="--card-accent:#ef4444;--card-bg:rgba(239,68,68,0.15)">
+        <div class="stat-icon">⚠️</div>
+        <div class="stat-info"><div class="stat-value">${statusData.unassigned}</div><div class="stat-label">Unassigned Patients</div></div>
+      </div>
+      <div class="stat-card" style="--card-accent:#06b6d4;--card-bg:rgba(6,182,212,0.15)">
+        <div class="stat-icon">📊</div>
+        <div class="stat-info"><div class="stat-value">${avgUtil}%</div><div class="stat-label">Avg Doctor Utilization</div></div>
+      </div>
+      <div class="stat-card" style="--card-accent:#f59e0b;--card-bg:rgba(245,158,11,0.15)">
+        <div class="stat-icon">⏱️</div>
+        <div class="stat-info"><div class="stat-value">${overallWait} min</div><div class="stat-label">Overall Avg Wait</div></div>
+      </div>
+      <div class="stat-card" style="--card-accent:#8b5cf6;--card-bg:rgba(139,92,246,0.15)">
+        <div class="stat-icon">🔄</div>
+        <div class="stat-info"><div class="stat-value">${runs.length}</div><div class="stat-label">Optimization Runs</div></div>
+      </div>`;
+
+    // Wait time chart
+    const waitLabels = ['Critical', 'Urgent', 'Normal', 'Low'];
+    const waitVals = [waitData.critical, waitData.urgent, waitData.normal, waitData.low];
+    new Chart(document.getElementById('waitChart'), {
+      type: 'bar',
+      data: {
+        labels: waitLabels,
+        datasets: [{
+          label: 'Avg Wait (min)',
+          data: waitVals,
+          backgroundColor: ['#ef4444','#f59e0b','#10b981','#64748b'],
+          borderRadius: 8, borderWidth: 0
+        }]
+      },
+      options: chartOpts()
+    });
+
+    // Assignment donut
+    new Chart(document.getElementById('assignChart'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Assigned', 'Unassigned'],
+        datasets: [{
+          data: [statusData.assigned, statusData.unassigned],
+          backgroundColor: ['#10b981', '#ef4444'],
+          borderWidth: 2, borderColor: '#0f2044'
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '65%',
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } }
+        }
+      }
+    });
+
+    // Doctor utilization bar
+    new Chart(document.getElementById('utilChart'), {
+      type: 'bar',
+      data: {
+        labels: utilData.map(d => d.doctor.replace('Dr. ', '')),
+        datasets: [
+          {
+            label: 'Booked',
+            data: utilData.map(d => d.booked),
+            backgroundColor: 'rgba(26,86,219,0.8)',
+            borderRadius: 6, borderWidth: 0
+          },
+          {
+            label: 'Max Capacity',
+            data: utilData.map(d => d.total_slots),
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            borderRadius: 6, borderWidth: 0
+          }
+        ]
+      },
+      options: chartOpts()
+    });
+
+    // Trend chart
+    if (runs.length > 0) {
+      const sorted = runs.slice().reverse().slice(-10);
+      new Chart(document.getElementById('trendChart'), {
+        type: 'line',
+        data: {
+          labels: sorted.map(r => `Run #${r.id} (${r.algorithm})`),
+          datasets: [
+            {
+              label: 'Assigned Patients',
+              data: sorted.map(r => r.assigned_patients),
+              borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)',
+              tension: 0.4, fill: true, pointRadius: 4
+            },
+            {
+              label: 'Avg Wait (min)',
+              data: sorted.map(r => r.avg_wait_time),
+              borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.05)',
+              tension: 0.4, fill: false, pointRadius: 4
+            },
+            {
+              label: 'Utilization %',
+              data: sorted.map(r => r.utilization_rate),
+              borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,0.05)',
+              tension: 0.4, fill: false, pointRadius: 4
+            }
+          ]
+        },
+        options: chartOpts()
+      });
+    } else {
+      document.getElementById('trendChart').parentElement.innerHTML =
+        `<div class="empty-state"><div class="empty-icon">📈</div><div class="empty-title">No optimization runs yet</div><div class="empty-desc"><a href="/optimize" class="btn btn-primary btn-sm" style="margin-top:10px">Run Optimization</a></div></div>`;
+    }
+
+  } catch(e) {
+    ToastManager.show('Failed to load analytics', 'error');
+    console.error(e);
+  }
+}
+
+loadAnalytics();
+</script>
+{% endblock %}
