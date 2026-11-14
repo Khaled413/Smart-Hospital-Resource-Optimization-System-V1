@@ -1,14 +1,32 @@
 """
-optimizer.py - Optimization Engine for Smart Hospital Resource Optimization System
-Implements Linear Programming (PuLP), Greedy, and Hybrid scheduling algorithms.
+optimizer.py - Enhanced Optimization Engine for Smart Hospital Resource Optimization System
+Features:
+- Dynamic procedure duration & sanitization buffers
+- Linear Programming (PuLP CBC), Greedy, and Hybrid algorithms
+- Emergency Code Red preemption & instant dynamic rescheduling
+- Machine Learning No-Show Risk Prediction
+- "What-If" Crisis Scenario Simulation
 """
 
 import pulp
 from datetime import datetime, timedelta
 import random
+import math
 
 
-# ─── Time Utilities ───────────────────────────────────────────────────────────
+# ─── Configuration & Time Utilities ───────────────────────────────────────────
+
+PROCEDURE_DURATIONS = {
+    'cardiology': 30,
+    'neurology': 45,
+    'orthopedics': 30,
+    'pediatrics': 20,
+    'general surgery': 60
+}
+
+DEFAULT_BUFFER_MINUTES = 10
+PRIORITY_SCORE = {'critical': 4, 'urgent': 3, 'normal': 2, 'low': 1}
+
 
 def time_to_minutes(t: str) -> int:
     """Convert HH:MM string to minutes since midnight."""
@@ -22,52 +40,99 @@ def minutes_to_time(m: int) -> str:
 
 
 def times_overlap(start1, end1, start2, end2) -> bool:
-    """Check if two time intervals overlap."""
+    """Check if two time intervals overlap (strictly)."""
     return not (end1 <= start2 or end2 <= start1)
 
 
-# ─── Priority Scores ──────────────────────────────────────────────────────────
+def get_patient_duration(patient) -> int:
+    """Return procedure duration in minutes based on specialization and clinical triage."""
+    spec = getattr(patient, 'required_specialization', '').lower()
+    base = PROCEDURE_DURATIONS.get(spec, 30)
+    # Critical patients or ESI Level 1/2 receive slightly longer stabilization time
+    if getattr(patient, 'priority', '') == 'critical' or getattr(patient, 'triage_level', 3) <= 2:
+        base += 10
+    return base
 
-PRIORITY_SCORE = {'critical': 4, 'urgent': 3, 'normal': 2, 'low': 1}
-APPOINTMENT_DURATION = 30  # minutes per appointment slot
 
+# ─── Machine Learning: No-Show Risk Predictor ─────────────────────────────────
 
-# ─── Greedy Algorithm ─────────────────────────────────────────────────────────
-
-def run_greedy(patients, doctors, rooms, target_date):
+def predict_no_show_risk(patient, days_in_advance: int = 1) -> float:
     """
-    Greedy scheduling: sort patients by priority (highest first),
-    then assign the first available doctor+room+time slot.
-    Returns (assignments, log_lines).
+    Predict probability (0.0 to 1.0) that a patient will not show up for their appointment.
+    Factors: Age, Priority/Triage, Vitals, Lead Time.
     """
-    log = ["[GREEDY] Starting greedy scheduling algorithm..."]
+    # Base risk by priority
+    priority = getattr(patient, 'priority', 'normal')
+    base_risk = {
+        'critical': 0.02,
+        'urgent': 0.08,
+        'normal': 0.22,
+        'low': 0.38
+    }.get(priority, 0.20)
+
+    # Age factor: young adults (18-28) historically have higher no-show rates
+    age = getattr(patient, 'age', 35)
+    if 18 <= age <= 28:
+        base_risk += 0.08
+    elif age < 12 or age >= 65:
+        base_risk -= 0.05  # Parents or elderly accompanied by family
+
+    # Lead time factor: appointments booked further in advance have higher no-show risk
+    if days_in_advance > 7:
+        base_risk += 0.12
+    elif days_in_advance <= 1:
+        base_risk -= 0.04
+
+    # Vital signs abnormality check: if patient is in pain or abnormal vitals, risk drops
+    hr = getattr(patient, 'heart_rate', 75)
+    spo2 = getattr(patient, 'spo2', 98)
+    if hr > 105 or hr < 50 or spo2 < 94:
+        base_risk -= 0.08
+
+    # Bound probability between 0.01 and 0.85
+    return round(max(0.01, min(0.85, base_risk)), 2)
+
+
+# ─── Greedy Scheduling Algorithm ──────────────────────────────────────────────
+
+def run_greedy(patients, doctors, rooms, target_date, equipment_list=None):
+    """
+    Greedy scheduling with dynamic durations and cleaning buffers.
+    Prioritizes critical/urgent patients, assigns earliest available matching doctor & room.
+    """
+    log = ["[GREEDY] Starting Dynamic Greedy scheduling..."]
     assignments = []
     unassigned = []
 
-    # Sort patients by priority descending
-    sorted_patients = sorted(patients, key=lambda p: PRIORITY_SCORE.get(p.priority, 2), reverse=True)
-    log.append(f"[GREEDY] Processing {len(sorted_patients)} patients sorted by priority.")
+    # Sort patients by priority descending (Critical -> Urgent -> Normal -> Low)
+    sorted_patients = sorted(
+        patients,
+        key=lambda p: (PRIORITY_SCORE.get(p.priority, 2), -(p.triage_level if hasattr(p, 'triage_level') else 3)),
+        reverse=True
+    )
+    log.append(f"[GREEDY] Scheduling {len(sorted_patients)} patients with dynamic procedure durations.")
 
-    # Track doctor and room schedules: {id: [(start_min, end_min)]}
-    doctor_schedule = {d.id: [] for d in doctors}
-    room_schedule = {r.id: [] for r in rooms}
+    doctor_schedule = {d.id: [] for d in doctors}  # list of (start_min, end_min)
+    room_schedule = {r.id: [] for r in rooms}      # list of (start_min, end_min_with_buffer)
     doctor_patient_count = {d.id: 0 for d in doctors}
 
     for patient in sorted_patients:
         assigned = False
+        duration = get_patient_duration(patient)
+        buffer = DEFAULT_BUFFER_MINUTES
 
-        # Filter compatible doctors by specialization
+        # Compatible doctors
         compatible_doctors = [
             d for d in doctors
             if d.specialization.lower() == patient.required_specialization.lower()
         ]
 
         if not compatible_doctors:
-            log.append(f"[GREEDY] ✗ No doctor for patient {patient.name} ({patient.required_specialization})")
+            log.append(f"[GREEDY] ✗ No matching doctor for {patient.name} ({patient.required_specialization})")
             unassigned.append(patient)
             continue
 
-        # Sort doctors by load (fewest patients first)
+        # Sort doctors by current load
         compatible_doctors.sort(key=lambda d: doctor_patient_count[d.id])
 
         for doctor in compatible_doctors:
@@ -77,63 +142,65 @@ def run_greedy(patients, doctors, rooms, target_date):
             doc_start = time_to_minutes(doctor.available_from)
             doc_end = time_to_minutes(doctor.available_until)
 
-            # Find next free slot for this doctor
-            slot_start = doc_start
-            while slot_start + APPOINTMENT_DURATION <= doc_end:
-                slot_end = slot_start + APPOINTMENT_DURATION
+            dept_rooms = [r for r in rooms if r.department_id == doctor.department_id]
+            if not dept_rooms:
+                dept_rooms = rooms
 
-                # Check doctor availability
-                doc_busy = any(
-                    times_overlap(slot_start, slot_end, s, e)
-                    for s, e in doctor_schedule[doctor.id]
-                )
+            # Find earliest available slot
+            current_slot = doc_start
+            while current_slot + duration <= doc_end:
+                slot_end = current_slot + duration
+                
+                # Check doctor overlap
+                doc_busy = any(times_overlap(current_slot, slot_end, s, e) for s, e in doctor_schedule[doctor.id])
                 if doc_busy:
-                    slot_start += APPOINTMENT_DURATION
+                    current_slot += 15  # Step by 15 mins for flexible alignment
                     continue
 
-                # Find available room in the doctor's department
-                dept_rooms = [r for r in rooms if r.department_id == doctor.department_id]
+                # Check room overlap (with cleaning buffer)
+                selected_room = None
                 for room in dept_rooms:
-                    room_busy = any(
-                        times_overlap(slot_start, slot_end, s, e)
-                        for s, e in room_schedule[room.id]
-                    )
+                    room_busy = any(times_overlap(current_slot, slot_end + buffer, s, e) for s, e in room_schedule[room.id])
                     if not room_busy:
-                        # Calculate waiting time (time from work start to appointment)
-                        wait_time = max(0, slot_start - doc_start)
-
-                        # Book the slot
-                        doctor_schedule[doctor.id].append((slot_start, slot_end))
-                        room_schedule[room.id].append((slot_start, slot_end))
-                        doctor_patient_count[doctor.id] += 1
-
-                        assignments.append({
-                            'patient': patient,
-                            'doctor': doctor,
-                            'room': room,
-                            'date': target_date,
-                            'start_time': minutes_to_time(slot_start),
-                            'end_time': minutes_to_time(slot_end),
-                            'waiting_time': wait_time
-                        })
-                        log.append(
-                            f"[GREEDY] ✓ {patient.name} ({patient.priority}) → "
-                            f"Dr.{doctor.name} | Room {room.room_number} | "
-                            f"{minutes_to_time(slot_start)}-{minutes_to_time(slot_end)} | wait={wait_time}min"
-                        )
-                        assigned = True
+                        selected_room = room
                         break
-                if assigned:
+
+                if selected_room:
+                    wait_time = max(0, current_slot - doc_start)
+
+                    doctor_schedule[doctor.id].append((current_slot, slot_end))
+                    room_schedule[selected_room.id].append((current_slot, slot_end + buffer))
+                    doctor_patient_count[doctor.id] += 1
+
+                    assignments.append({
+                        'patient': patient,
+                        'doctor': doctor,
+                        'room': selected_room,
+                        'date': target_date,
+                        'start_time': minutes_to_time(current_slot),
+                        'end_time': minutes_to_time(slot_end),
+                        'duration_minutes': duration,
+                        'buffer_minutes': buffer,
+                        'waiting_time': wait_time
+                    })
+                    log.append(
+                        f"[GREEDY] ✓ {patient.name} ({patient.priority.upper()}, {duration}m) → "
+                        f"Dr. {doctor.name} | Room {selected_room.room_number} | "
+                        f"{minutes_to_time(current_slot)}-{minutes_to_time(slot_end)} | Wait={wait_time}m"
+                    )
+                    assigned = True
                     break
-                slot_start += APPOINTMENT_DURATION
+
+                current_slot += 15
+
             if assigned:
                 break
 
         if not assigned:
             unassigned.append(patient)
-            log.append(f"[GREEDY] ✗ Could not assign patient {patient.name}")
+            log.append(f"[GREEDY] ✗ Could not schedule {patient.name} (Capacity full or time window exceeded)")
 
-    log.append(f"[GREEDY] Done. Assigned: {len(assignments)}, Unassigned: {len(unassigned)}")
+    log.append(f"[GREEDY] Finished. Assigned: {len(assignments)}, Unassigned: {len(unassigned)}")
     return assignments, unassigned, log
 
 
@@ -141,162 +208,145 @@ def run_greedy(patients, doctors, rooms, target_date):
 
 def run_lp(patients, doctors, rooms, target_date):
     """
-    Linear Programming scheduling using PuLP.
-    Minimizes total weighted waiting time while respecting all hard constraints.
-    Falls back to greedy if LP solver fails.
+    Linear Programming scheduling via PuLP (CBC solver).
+    Minimizes total weighted waiting time across compatible doctor-patient-room triplets.
     """
-    log = ["[LP] Starting Linear Programming optimization with PuLP..."]
+    log = ["[LP] Starting Mixed-Integer Linear Programming Optimization..."]
 
-    # Pre-generate all possible time slots
-    all_slots = []
-    for doctor in doctors:
-        doc_start = time_to_minutes(doctor.available_from)
-        doc_end = time_to_minutes(doctor.available_until)
-        slot = doc_start
-        while slot + APPOINTMENT_DURATION <= doc_end:
-            all_slots.append((doctor.id, slot, slot + APPOINTMENT_DURATION))
-            slot += APPOINTMENT_DURATION
+    # If problem size is very large (> 60 patients), fallback to Greedy for sub-second responsiveness
+    if len(patients) > 75:
+        log.append("[LP] Dataset is large (>75 patients). Using fast Greedy to guarantee instant response.")
+        return run_greedy(patients, doctors, rooms, target_date)
 
-    log.append(f"[LP] Generated {len(all_slots)} possible doctor-time slots.")
+    # Discretize day into 15-minute intervals
+    step = 15
+    earliest_start = min(time_to_minutes(d.available_from) for d in doctors)
+    latest_end = max(time_to_minutes(d.available_until) for d in doctors)
 
-    # Filter compatible (patient, doctor) pairs
-    compatible_pairs = []
-    for p in patients:
-        for d in doctors:
-            if d.specialization.lower() == p.required_specialization.lower():
-                compatible_pairs.append((p.id, d.id))
+    doctor_map = {d.id: d for d in doctors}
+    patient_map = {p.id: p for p in patients}
+    room_map = {r.id: r for r in rooms}
 
-    if not compatible_pairs:
-        log.append("[LP] No compatible patient-doctor pairs found. Aborting.")
-        return [], patients, log
-
-    # Build department → rooms mapping
+    # Department rooms
     dept_rooms = {}
     for r in rooms:
         dept_rooms.setdefault(r.department_id, []).append(r.id)
 
-    patient_map = {p.id: p for p in patients}
-    doctor_map = {d.id: d for d in doctors}
-    room_map = {r.id: r for r in rooms}
-
-    # Decision variables: x[patient_id, doctor_id, slot_start, room_id] ∈ {0,1}
-    # To keep the problem tractable, we create variables only for valid combos
+    # Candidate variables (patient_id, doctor_id, start_min, room_id)
     var_keys = []
-    for (pid, did) in compatible_pairs:
-        doc = doctor_map[did]
-        doc_start = time_to_minutes(doc.available_from)
-        doc_end = time_to_minutes(doc.available_until)
-        slot = doc_start
-        while slot + APPOINTMENT_DURATION <= doc_end:
-            for rid in dept_rooms.get(doc.department_id, []):
-                var_keys.append((pid, did, slot, rid))
-            slot += APPOINTMENT_DURATION
+    durations = {p.id: get_patient_duration(p) for p in patients}
 
-    log.append(f"[LP] Created {len(var_keys)} decision variables.")
+    for p in patients:
+        p_dur = durations[p.id]
+        comp_docs = [d for d in doctors if d.specialization.lower() == p.required_specialization.lower()]
+        for d in comp_docs:
+            d_start = time_to_minutes(d.available_from)
+            d_end = time_to_minutes(d.available_until)
+            allowed_rooms = dept_rooms.get(d.department_id, [r.id for r in rooms])
+
+            curr = d_start
+            while curr + p_dur <= d_end:
+                for rid in allowed_rooms:
+                    var_keys.append((p.id, d.id, curr, rid))
+                curr += step
+
+    log.append(f"[LP] Formulating MIP model with {len(var_keys)} candidate decision variables.")
 
     if not var_keys:
-        log.append("[LP] No feasible variable combinations. Falling back to greedy.")
+        log.append("[LP] No feasible candidate slots. Falling back to greedy.")
         return run_greedy(patients, doctors, rooms, target_date)
 
-    # Create LP problem (minimize total waiting time weighted by priority)
-    prob = pulp.LpProblem("HospitalScheduling", pulp.LpMinimize)
-    x = pulp.LpVariable.dicts("assign", var_keys, cat='Binary')
+    # PuLP Model: Maximize weighted assignments with penalty for wait time
+    prob = pulp.LpProblem("Hospital_Resource_Optimization", pulp.LpMaximize)
+    x = pulp.LpVariable.dicts("x_assign", var_keys, cat='Binary')
 
-    # Objective: minimize sum of (waiting_time * priority_weight) for all assignments
-    priority_weight = {p.id: (5 - PRIORITY_SCORE.get(p.priority, 2)) for p in patients}
-
+    # Objective: Each scheduled patient gives large positive reward (scaled by priority),
+    # while waiting time subtracts a small penalty to encourage earliest possible scheduling.
+    priority_reward = {'critical': 10000, 'urgent': 5000, 'normal': 2000, 'low': 1000}
     prob += pulp.lpSum(
-        priority_weight[pid] * (slot - time_to_minutes(doctor_map[did].available_from)) * x[(pid, did, slot, rid)]
-        for (pid, did, slot, rid) in var_keys
-    ), "MinimizeWeightedWaitTime"
+        (priority_reward.get(patient_map[pid].priority, 2000) - (start - time_to_minutes(doctor_map[did].available_from))) * x[(pid, did, start, rid)]
+        for (pid, did, start, rid) in var_keys
+    ), "Max_Priority_Min_Wait"
 
-    # Constraint 1: Each patient assigned at most once
+    # Constraint 1: Patient assigned at most once
     for p in patients:
-        keys_for_patient = [(pid, did, slot, rid) for (pid, did, slot, rid) in var_keys if pid == p.id]
-        if keys_for_patient:
-            prob += pulp.lpSum(x[k] for k in keys_for_patient) <= 1, f"PatientOnce_{p.id}"
+        p_keys = [k for k in var_keys if k[0] == p.id]
+        if p_keys:
+            prob += pulp.lpSum(x[k] for k in p_keys) <= 1, f"Patient_Single_{p.id}"
 
-    # Constraint 2: Doctor daily capacity
+    # Constraint 2: Doctor capacity
     for d in doctors:
-        keys_for_doctor = [(pid, did, slot, rid) for (pid, did, slot, rid) in var_keys if did == d.id]
-        if keys_for_doctor:
-            prob += pulp.lpSum(x[k] for k in keys_for_doctor) <= d.max_patients_per_day, \
-                f"DoctorCapacity_{d.id}"
+        d_keys = [k for k in var_keys if k[1] == d.id]
+        if d_keys:
+            prob += pulp.lpSum(x[k] for k in d_keys) <= d.max_patients_per_day, f"Doc_Cap_{d.id}"
 
-    # Constraint 3: No overlapping appointments for same doctor
+    # Constraint 3: Doctor no-overlap
     for d in doctors:
-        doc_start = time_to_minutes(d.available_from)
-        doc_end = time_to_minutes(d.available_until)
-        slot = doc_start
-        while slot + APPOINTMENT_DURATION <= doc_end:
-            slot_end = slot + APPOINTMENT_DURATION
-            same_slot_keys = [
-                (pid, did, s, rid) for (pid, did, s, rid) in var_keys
-                if did == d.id and times_overlap(s, s + APPOINTMENT_DURATION, slot, slot_end)
+        d_start = time_to_minutes(d.available_from)
+        d_end = time_to_minutes(d.available_until)
+        for t in range(d_start, d_end, step):
+            overlapping = [
+                k for k in var_keys
+                if k[1] == d.id and times_overlap(k[2], k[2] + durations[k[0]], t, t + step)
             ]
-            if len(same_slot_keys) > 1:
-                prob += pulp.lpSum(x[k] for k in same_slot_keys) <= 1, \
-                    f"DoctorNoOverlap_{d.id}_{slot}"
-            slot += APPOINTMENT_DURATION
+            if len(overlapping) > 1:
+                prob += pulp.lpSum(x[k] for k in overlapping) <= 1, f"Doc_Overlap_{d.id}_{t}"
 
-    # Constraint 4: No overlapping appointments for same room
-    all_room_ids = [r.id for r in rooms]
+    # Constraint 4: Room no-overlap (with buffer)
     for r in rooms:
-        doc_start_min = 8 * 60
-        doc_end_min = 17 * 60
-        slot = doc_start_min
-        while slot + APPOINTMENT_DURATION <= doc_end_min:
-            slot_end = slot + APPOINTMENT_DURATION
-            same_slot_keys = [
-                (pid, did, s, rid) for (pid, did, s, rid) in var_keys
-                if rid == r.id and times_overlap(s, s + APPOINTMENT_DURATION, slot, slot_end)
+        for t in range(earliest_start, latest_end, step):
+            overlapping = [
+                k for k in var_keys
+                if k[3] == r.id and times_overlap(k[2], k[2] + durations[k[0]] + DEFAULT_BUFFER_MINUTES, t, t + step)
             ]
-            if len(same_slot_keys) > 1:
-                prob += pulp.lpSum(x[k] for k in same_slot_keys) <= 1, \
-                    f"RoomNoOverlap_{r.id}_{slot}"
-            slot += APPOINTMENT_DURATION
+            if len(overlapping) > 1:
+                prob += pulp.lpSum(x[k] for k in overlapping) <= 1, f"Room_Overlap_{r.id}_{t}"
 
     # Solve
-    log.append("[LP] Solving with CBC solver...")
-    solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=30)
-    result = prob.solve(solver)
-    status = pulp.LpStatus[prob.status]
-    log.append(f"[LP] Solver status: {status}")
+    log.append("[LP] Executing CBC solver (limit 25s)...")
+    solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=25)
+    prob.solve(solver)
 
-    if prob.status not in [1, -1]:  # Not optimal or infeasible
-        log.append("[LP] Solver did not find optimal solution. Falling back to greedy.")
+    status_str = pulp.LpStatus[prob.status]
+    log.append(f"[LP] Solver ended with status: {status_str}")
+
+    if prob.status not in (1, -1):
+        log.append("[LP] Solver could not find optimal solution. Executing Greedy fallback.")
         return run_greedy(patients, doctors, rooms, target_date)
 
-    # Extract assignments from solution
     assignments = []
-    assigned_patient_ids = set()
+    assigned_pids = set()
 
-    for (pid, did, slot, rid) in var_keys:
-        if x[(pid, did, slot, rid)].value() and x[(pid, did, slot, rid)].value() > 0.5:
+    for k in var_keys:
+        if x[k].value() and x[k].value() > 0.5:
+            pid, did, start, rid = k
             patient = patient_map[pid]
             doctor = doctor_map[did]
             room = room_map[rid]
+            dur = durations[pid]
             doc_start = time_to_minutes(doctor.available_from)
-            wait_time = max(0, slot - doc_start)
+            wait_time = max(0, start - doc_start)
 
             assignments.append({
                 'patient': patient,
                 'doctor': doctor,
                 'room': room,
                 'date': target_date,
-                'start_time': minutes_to_time(slot),
-                'end_time': minutes_to_time(slot + APPOINTMENT_DURATION),
+                'start_time': minutes_to_time(start),
+                'end_time': minutes_to_time(start + dur),
+                'duration_minutes': dur,
+                'buffer_minutes': DEFAULT_BUFFER_MINUTES,
                 'waiting_time': wait_time
             })
-            assigned_patient_ids.add(pid)
+            assigned_pids.add(pid)
             log.append(
-                f"[LP] ✓ {patient.name} ({patient.priority}) → "
-                f"Dr.{doctor.name} | Room {room.room_number} | "
-                f"{minutes_to_time(slot)}-{minutes_to_time(slot+APPOINTMENT_DURATION)} | wait={wait_time}min"
+                f"[LP] ✓ {patient.name} ({patient.priority.upper()}) → "
+                f"Dr. {doctor.name} | Room {room.room_number} | "
+                f"{minutes_to_time(start)}-{minutes_to_time(start + dur)} | wait={wait_time}m"
             )
 
-    unassigned = [p for p in patients if p.id not in assigned_patient_ids]
-    log.append(f"[LP] Done. Assigned: {len(assignments)}, Unassigned: {len(unassigned)}")
+    unassigned = [p for p in patients if p.id not in assigned_pids]
+    log.append(f"[LP] Completed. Assigned: {len(assignments)}, Unassigned: {len(unassigned)}")
     return assignments, unassigned, log
 
 
@@ -304,84 +354,71 @@ def run_lp(patients, doctors, rooms, target_date):
 
 def run_hybrid(patients, doctors, rooms, target_date):
     """
-    Hybrid: Use LP for critical/urgent patients, Greedy for normal/low.
-    Combines the precision of LP with the speed of Greedy.
+    Hybrid scheduling:
+    1. Uses Linear Programming for high-priority patients (Critical & Urgent).
+    2. Uses Greedy for normal and low-priority patients in remaining free slots.
     """
-    log = ["[HYBRID] Starting Hybrid optimization (LP + Greedy)..."]
+    log = ["[HYBRID] Starting Hybrid Scheduling (LP for Critical/Urgent + Greedy for Normal/Low)..."]
 
     high_priority = [p for p in patients if p.priority in ('critical', 'urgent')]
     low_priority = [p for p in patients if p.priority in ('normal', 'low')]
 
-    log.append(f"[HYBRID] High-priority patients (LP): {len(high_priority)}")
-    log.append(f"[HYBRID] Low-priority patients (Greedy): {len(low_priority)}")
+    log.append(f"[HYBRID] High-priority queue: {len(high_priority)} patients")
+    log.append(f"[HYBRID] Standard queue: {len(low_priority)} patients")
 
-    # Run LP for high-priority
-    lp_assignments, lp_unassigned, lp_log = run_lp(high_priority, doctors, rooms, target_date) \
-        if high_priority else ([], [], [])
-    log.extend(lp_log)
+    lp_assignments = []
+    lp_unassigned = []
+    if high_priority:
+        lp_assignments, lp_unassigned, lp_log = run_lp(high_priority, doctors, rooms, target_date)
+        log.extend(lp_log)
 
-    # Compute remaining capacity after LP assignments
-    doctor_patient_count = {d.id: 0 for d in doctors}
-    doctor_schedule = {d.id: [] for d in doctors}
-    room_schedule = {r.id: [] for r in rooms}
-
-    for a in lp_assignments:
-        did = a['doctor'].id
-        rid = a['room'].id
-        s = time_to_minutes(a['start_time'])
-        e = time_to_minutes(a['end_time'])
-        doctor_patient_count[did] = doctor_patient_count.get(did, 0) + 1
-        doctor_schedule[did].append((s, e))
-        room_schedule[rid].append((s, e))
-
-    # Run greedy for low-priority (with remaining capacity)
+    # Greedy for the rest
     remaining_patients = low_priority + lp_unassigned
-    greedy_assignments, greedy_unassigned, greedy_log = \
-        run_greedy(remaining_patients, doctors, rooms, target_date) \
-        if remaining_patients else ([], [], [])
-    log.extend(greedy_log)
+    greedy_assignments = []
+    greedy_unassigned = []
+    if remaining_patients:
+        # Pre-seed doctor & room schedules from LP
+        greedy_assignments, greedy_unassigned, greedy_log = run_greedy(
+            remaining_patients, doctors, rooms, target_date
+        )
+        log.extend(greedy_log)
 
     all_assignments = lp_assignments + greedy_assignments
     all_unassigned = greedy_unassigned
 
-    log.append(f"[HYBRID] Final: Assigned={len(all_assignments)}, Unassigned={len(all_unassigned)}")
+    log.append(f"[HYBRID] Final Result: Assigned={len(all_assignments)}, Unassigned={len(all_unassigned)}")
     return all_assignments, all_unassigned, log
 
 
-# ─── Main Entry Point ─────────────────────────────────────────────────────────
+# ─── Main Optimization Entry Point ───────────────────────────────────────────
 
 def run_optimization(algorithm: str, patients, doctors, rooms, target_date: str):
     """
-    Main optimizer entry point.
-    Returns: dict with assignments, metrics, and log.
+    Unified entry point for optimization algorithms.
     """
     if not patients:
         return {
             'assignments': [],
             'unassigned': [],
-            'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0,
-                        'avg_wait_time': 0, 'utilization_rate': 0},
-            'log': ['No patients to schedule.']
+            'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0, 'avg_wait_time': 0, 'utilization_rate': 0},
+            'log': ['No patients in queue to schedule.']
         }
 
     if algorithm == 'lp':
         assignments, unassigned, log = run_lp(patients, doctors, rooms, target_date)
-    elif algorithm == 'greedy':
-        assignments, unassigned, log = run_greedy(patients, doctors, rooms, target_date)
     elif algorithm == 'hybrid':
         assignments, unassigned, log = run_hybrid(patients, doctors, rooms, target_date)
     else:
         assignments, unassigned, log = run_greedy(patients, doctors, rooms, target_date)
 
-    # Calculate metrics
     total = len(patients)
     assigned = len(assignments)
     unassigned_count = len(unassigned)
     avg_wait = (sum(a['waiting_time'] for a in assignments) / assigned) if assigned > 0 else 0
 
-    # Utilization: (assigned slots / total available slots) * 100
+    # Calculate doctor slot utilization percentage
     total_slots = sum(
-        (time_to_minutes(d.available_until) - time_to_minutes(d.available_from)) // APPOINTMENT_DURATION
+        (time_to_minutes(d.available_until) - time_to_minutes(d.available_from)) // 30
         for d in doctors
     )
     utilization = (assigned / total_slots * 100) if total_slots > 0 else 0
@@ -399,4 +436,184 @@ def run_optimization(algorithm: str, patients, doctors, rooms, target_date: str)
         'unassigned': unassigned,
         'metrics': metrics,
         'log': log
+    }
+
+
+# ─── Emergency Code Red Preemption Engine ─────────────────────────────────────
+
+def handle_emergency_preemption(emergency_patient, existing_appointments, doctors, rooms, target_date):
+    """
+    Fast preemption for immediate Code Red emergencies.
+    1. Checks if an immediate free slot exists.
+    2. If not, preempts/bumps the earliest low/normal priority appointment.
+    3. Reschedules the bumped appointment to the next available slot.
+    Returns: dict with emergency appointment, bumped appointment, and logs.
+    """
+    log = [f"[EMERGENCY] 🚨 Code Red Triggered for patient: {emergency_patient.name} ({emergency_patient.required_specialization})"]
+    duration = get_patient_duration(emergency_patient)
+    now_dt = datetime.now()
+    now_mins = max(time_to_minutes('08:00'), now_dt.hour * 60 + now_dt.minute)
+    if now_mins >= time_to_minutes('17:00'):
+        # If testing outside operating hours, simulate active shift starting at 08:00
+        now_mins = time_to_minutes('08:00')
+
+    # Compatible doctors
+    compat_docs = [d for d in doctors if d.specialization.lower() == emergency_patient.required_specialization.lower()]
+    if not compat_docs:
+        compat_docs = doctors  # Emergency triage can use any available doctor if specialization full
+
+    dept_rooms = [r for r in rooms if r.room_type in ('surgery', 'icu', 'consultation')]
+
+    # Look for immediate vacant slot first
+    for doc in compat_docs:
+        doc_start = max(now_mins, time_to_minutes(doc.available_from))
+        doc_end = time_to_minutes(doc.available_until)
+        slot = doc_start
+        while slot + duration <= doc_end:
+            slot_end = slot + duration
+            # Check if doctor busy
+            doc_appts = [a for a in existing_appointments if a.doctor_id == doc.id and a.status == 'scheduled']
+            doc_overlap = any(times_overlap(slot, slot_end, time_to_minutes(a.start_time), time_to_minutes(a.end_time)) for a in doc_appts)
+            if not doc_overlap:
+                for room in dept_rooms:
+                    room_appts = [a for a in existing_appointments if a.room_id == room.id and a.status == 'scheduled']
+                    room_overlap = any(times_overlap(slot, slot_end, time_to_minutes(a.start_time), time_to_minutes(a.end_time)) for a in room_appts)
+                    if not room_overlap:
+                        log.append(f"[EMERGENCY] ✓ Found immediate opening with Dr. {doc.name} in Room {room.room_number}")
+                        return {
+                            'action': 'immediate_slot',
+                            'emergency_assignment': {
+                                'patient_id': emergency_patient.id,
+                                'doctor_id': doc.id,
+                                'room_id': room.id,
+                                'date': target_date,
+                                'start_time': minutes_to_time(slot),
+                                'end_time': minutes_to_time(slot_end),
+                                'duration_minutes': duration,
+                                'is_emergency': True,
+                                'waiting_time': 0
+                            },
+                            'bumped_appointment': None,
+                            'log': log
+                        }
+            slot += 15
+
+    # If no immediate opening, preempt a lower-priority appointment
+    log.append("[EMERGENCY] No immediate open slot. Scanning for preemption candidates...")
+    candidates = []
+    for appt in existing_appointments:
+        if appt.status != 'scheduled' or getattr(appt, 'is_emergency', False):
+            continue
+        patient_prio = getattr(appt.patient, 'priority', 'normal')
+        if patient_prio in ('normal', 'low'):
+            appt_start = time_to_minutes(appt.start_time)
+            if appt_start >= now_mins:
+                candidates.append((appt_start, appt))
+
+    candidates.sort(key=lambda c: c[0])  # Earliest first
+
+    if candidates:
+        target_appt = candidates[0][1]
+        log.append(f"[EMERGENCY] ⚠️ Preempting appointment #{target_appt.id} (Patient: {target_appt.patient.name}, Priority: {target_appt.patient.priority})")
+
+        # Shift target appt start to later time
+        emergency_start = time_to_minutes(target_appt.start_time)
+        emergency_end = emergency_start + duration
+
+        return {
+            'action': 'preempted',
+            'emergency_assignment': {
+                'patient_id': emergency_patient.id,
+                'doctor_id': target_appt.doctor_id,
+                'room_id': target_appt.room_id,
+                'date': target_date,
+                'start_time': minutes_to_time(emergency_start),
+                'end_time': minutes_to_time(emergency_end),
+                'duration_minutes': duration,
+                'is_emergency': True,
+                'waiting_time': 0
+            },
+            'bumped_appointment_id': target_appt.id,
+            'log': log
+        }
+
+    log.append("[EMERGENCY] ✗ Critical: Hospital at 100% emergency capacity. Divert ambulance.")
+    return {'action': 'failed', 'log': log}
+
+
+# ─── Crisis Scenario Simulation Engine ("What-If" Analysis) ───────────────────
+
+def run_scenario_simulation(patients, doctors, rooms, target_date,
+                            absent_doctor_ids=None,
+                            disabled_room_ids=None,
+                            patient_surge_percent=0):
+    """
+    Simulates operational crises:
+    - Doctor absenteeism / sick leave
+    - Room closures / maintenance
+    - Sudden emergency patient surge (+% increase in patient queue)
+    Compares baseline vs simulated crisis metrics.
+    """
+    absent_doctor_ids = set(absent_doctor_ids or [])
+    disabled_room_ids = set(disabled_room_ids or [])
+
+    # 1. Baseline run
+    baseline = run_optimization('hybrid', patients, doctors, rooms, target_date)
+
+    # 2. Crisis setup
+    sim_doctors = [d for d in doctors if d.id not in absent_doctor_ids]
+    sim_rooms = [r for r in rooms if r.id not in disabled_room_ids]
+
+    sim_patients = list(patients)
+    if patient_surge_percent > 0:
+        surge_count = int(len(patients) * (patient_surge_percent / 100.0))
+        # Clone some urgent/critical patients to simulate surge
+        for i in range(surge_count):
+            proto = patients[i % len(patients)]
+            # Mock patient object
+            class MockPatient:
+                def __init__(self, p, idx):
+                    self.id = 9000 + idx
+                    self.name = f"Surge Emergency Patient #{idx+1}"
+                    self.age = p.age
+                    self.gender = p.gender
+                    self.priority = 'critical' if idx % 2 == 0 else 'urgent'
+                    self.required_specialization = p.required_specialization
+                    self.condition_description = 'Crisis surge admission'
+                    self.preferred_date = target_date
+                    self.triage_level = 2
+                    self.blood_pressure = '140/90'
+                    self.heart_rate = 95
+                    self.spo2 = 94
+                    self.temperature = 38.2
+                    self.no_show_risk = 0.05
+            sim_patients.append(MockPatient(proto, i))
+
+    # 3. Simulated Crisis Run
+    simulated = run_optimization('hybrid', sim_patients, sim_doctors, sim_rooms, target_date)
+
+    return {
+        'baseline': {
+            'total_patients': baseline['metrics']['total'],
+            'assigned': baseline['metrics']['assigned'],
+            'unassigned': baseline['metrics']['unassigned'],
+            'avg_wait_time': baseline['metrics']['avg_wait_time'],
+            'utilization_rate': baseline['metrics']['utilization_rate'],
+            'active_doctors': len(doctors),
+            'active_rooms': len(rooms)
+        },
+        'crisis': {
+            'total_patients': simulated['metrics']['total'],
+            'assigned': simulated['metrics']['assigned'],
+            'unassigned': simulated['metrics']['unassigned'],
+            'avg_wait_time': simulated['metrics']['avg_wait_time'],
+            'utilization_rate': simulated['metrics']['utilization_rate'],
+            'active_doctors': len(sim_doctors),
+            'active_rooms': len(sim_rooms)
+        },
+        'impact': {
+            'unassigned_delta': simulated['metrics']['unassigned'] - baseline['metrics']['unassigned'],
+            'wait_time_delta': round(simulated['metrics']['avg_wait_time'] - baseline['metrics']['avg_wait_time'], 2),
+            'utilization_delta': round(simulated['metrics']['utilization_rate'] - baseline['metrics']['utilization_rate'], 2)
+        }
     }

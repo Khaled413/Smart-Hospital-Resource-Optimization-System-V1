@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — MediOptim Pro{% endblock %}
-{% block page_title %}Dashboard{% endblock %}
-{% block page_subtitle %}Real-time hospital resource overview{% endblock %}
+{% block page_title %}Hospital Operations Dashboard{% endblock %}
+{% block page_subtitle %}Real-time clinical resource overview, bed occupancy, and optimization telemetry{% endblock %}
 
 {% block content %}
-<!-- Stats Cards -->
-<div class="stats-grid" id="stats-grid">
+<!-- Stats Cards Grid -->
+<div class="stats-grid" id="stats-grid" style="margin-bottom:24px">
   <div class="stat-card" style="--card-accent:#1a56db;--card-bg:rgba(26,86,219,0.15)">
     <div class="stat-icon">🧑‍⚕️</div>
     <div class="stat-info">
@@ -21,104 +21,113 @@
     </div>
   </div>
   <div class="stat-card" style="--card-accent:#10b981;--card-bg:rgba(16,185,129,0.15)">
-    <div class="stat-icon">🚪</div>
+    <div class="stat-icon">🛏️</div>
     <div class="stat-info">
-      <div class="stat-value" id="stat-rooms">—</div>
-      <div class="stat-label">Total Rooms</div>
+      <div class="stat-value" id="stat-beds">—</div>
+      <div class="stat-label">Beds Occupancy</div>
     </div>
   </div>
   <div class="stat-card" style="--card-accent:#8b5cf6;--card-bg:rgba(139,92,246,0.15)">
-    <div class="stat-icon">🏢</div>
+    <div class="stat-icon">🩺</div>
     <div class="stat-info">
-      <div class="stat-value" id="stat-depts">—</div>
-      <div class="stat-label">Departments</div>
+      <div class="stat-value" id="stat-equipment">—</div>
+      <div class="stat-label">Active Equipment</div>
     </div>
   </div>
   <div class="stat-card" style="--card-accent:#f59e0b;--card-bg:rgba(245,158,11,0.15)">
     <div class="stat-icon">📅</div>
     <div class="stat-info">
       <div class="stat-value" id="stat-appts">—</div>
-      <div class="stat-label">Appointments Today</div>
+      <div class="stat-label">Consultations Today</div>
     </div>
   </div>
   <div class="stat-card" style="--card-accent:#ef4444;--card-bg:rgba(239,68,68,0.15)">
-    <div class="stat-icon">⏱️</div>
+    <div class="stat-icon">🚨</div>
     <div class="stat-info">
-      <div class="stat-value" id="stat-wait">—</div>
-      <div class="stat-label">Avg Wait (min)</div>
+      <div class="stat-value" id="stat-emergencies">—</div>
+      <div class="stat-label">Code Red Today</div>
     </div>
   </div>
   <div class="stat-card" style="--card-accent:#10b981;--card-bg:rgba(16,185,129,0.15)">
     <div class="stat-icon">📊</div>
     <div class="stat-info">
-      <div class="stat-value" id="stat-util">—</div>
-      <div class="stat-label">Utilization Rate</div>
+      <div class="stat-value" id="stat-util">—%</div>
+      <div class="stat-label">Doctor Utilization</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#f59e0b;--card-bg:rgba(245,158,11,0.15)">
+    <div class="stat-icon">⏱️</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-wait">— m</div>
+      <div class="stat-label">Avg Wait Time</div>
     </div>
   </div>
 </div>
 
 <!-- Charts Row -->
-<div class="grid-3">
+<div class="grid-3" style="margin-bottom:24px">
   <div class="card">
     <div class="card-header">
       <div>
-        <div class="card-title">Patient Priority Distribution</div>
-        <div class="card-subtitle">Current queue breakdown</div>
+        <div class="card-title">Patient Triage Breakdown</div>
+        <div class="card-subtitle">Queue sorted by urgency</div>
       </div>
     </div>
-    <div class="chart-container">
-      <canvas id="priorityChart"></canvas>
-    </div>
+    <div class="chart-container"><canvas id="priorityChart"></canvas></div>
   </div>
 
   <div class="card">
     <div class="card-header">
       <div>
         <div class="card-title">Department Workload</div>
-        <div class="card-subtitle">Appointments by department</div>
+        <div class="card-subtitle">Active appointments by specialty</div>
       </div>
     </div>
-    <div class="chart-container">
-      <canvas id="deptChart"></canvas>
-    </div>
+    <div class="chart-container"><canvas id="deptChart"></canvas></div>
   </div>
 
   <div class="card">
     <div class="card-header">
       <div>
-        <div class="card-title">Doctor Utilization</div>
-        <div class="card-subtitle">Today's booking rate</div>
+        <div class="card-title">Physician Capacity Rate</div>
+        <div class="card-subtitle">Daily consultation quota</div>
       </div>
     </div>
-    <div class="chart-container">
-      <canvas id="doctorChart"></canvas>
-    </div>
+    <div class="chart-container"><canvas id="doctorChart"></canvas></div>
   </div>
 </div>
 
-<!-- Quick Actions -->
-<div class="card mt-4">
+<!-- Quick Fast Actions -->
+<div class="card">
   <div class="card-header">
-    <div class="card-title">⚡ Quick Actions</div>
+    <div class="card-title">⚡ Fast Clinical & Administrative Actions</div>
   </div>
-  <div style="display:flex;gap:12px;flex-wrap:wrap;">
-    <a href="/patients" class="btn btn-primary">🧑‍⚕️ Manage Patients</a>
-    <a href="/optimize" class="btn btn-success">🔀 Run Optimization</a>
-    <a href="/appointments" class="btn btn-outline">📅 View Appointments</a>
-    <a href="/analytics" class="btn btn-outline">📈 Analytics</a>
-    <a href="/history" class="btn btn-outline">🕓 Run History</a>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:14px;padding:8px 0">
+    <a href="/optimize" class="btn btn-primary" style="justify-content:center;padding:14px">
+      ⚡ Run AI Optimization
+    </a>
+    <button class="btn btn-emergency" onclick="openEmergencyModal()" style="justify-content:center;padding:14px">
+      🚨 Code Red Walk-In
+    </button>
+    <a href="/beds" class="btn btn-outline" style="justify-content:center;padding:14px">
+      🛏️ Manage Beds & Wards
+    </a>
+    <a href="/equipment" class="btn btn-outline" style="justify-content:center;padding:14px">
+      🩺 Equipment Fleets
+    </a>
+    <a href="/simulator" class="btn btn-outline" style="justify-content:center;padding:14px">
+      🧪 Crisis Simulator
+    </a>
+    <a href="/queue-display" target="_blank" class="btn btn-outline" style="justify-content:center;padding:14px">
+      📺 Waiting Hall Monitor
+    </a>
   </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-let priorityChart, deptChart, doctorChart;
-
-const chartDefaults = {
-  plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'Inter', size: 11 } } } },
-  scales: {}
-};
+let pChart = null, dChart = null, docChart = null;
 
 async function loadDashboard() {
   try {
@@ -126,94 +135,91 @@ async function loadDashboard() {
 
     document.getElementById('stat-patients').textContent = data.total_patients;
     document.getElementById('stat-doctors').textContent = data.total_doctors;
-    document.getElementById('stat-rooms').textContent = data.total_rooms;
-    document.getElementById('stat-depts').textContent = data.total_departments;
+    document.getElementById('stat-beds').textContent = `${data.occupied_beds}/${data.total_beds} (${data.bed_occupancy_rate}%)`;
+    document.getElementById('stat-equipment').textContent = `${data.available_equipment}/${data.total_equipment}`;
     document.getElementById('stat-appts').textContent = data.appointments_today;
-    document.getElementById('stat-wait').textContent = data.avg_wait_time + ' min';
-    document.getElementById('stat-util').textContent = data.utilization_rate + '%';
+    document.getElementById('stat-emergencies').textContent = data.emergencies_today || 0;
+    document.getElementById('stat-util').textContent = `${data.utilization_rate}%`;
+    document.getElementById('stat-wait').textContent = `${data.avg_wait_time}m`;
 
-    buildPriorityChart(data.priority_distribution);
-    buildDeptChart(data.department_workload);
-    buildDoctorChart(data.doctor_utilization);
+    renderCharts(data);
   } catch(e) {
     ToastManager.show('Failed to load dashboard data', 'error');
   }
 }
 
-function buildPriorityChart(dist) {
-  const labels = Object.keys(dist);
-  const values = Object.values(dist);
-  const colors = labels.map(l => PRIORITY_COLORS[l] || '#64748b');
+function renderCharts(data) {
+  // Priority Chart
+  const pLabels = Object.keys(data.priority_distribution);
+  const pValues = Object.values(data.priority_distribution);
+  const pColors = pLabels.map(l => PRIORITY_COLORS[l] || '#64748b');
 
-  if (priorityChart) priorityChart.destroy();
-  priorityChart = new Chart(document.getElementById('priorityChart'), {
+  if (pChart) pChart.destroy();
+  pChart = new Chart(document.getElementById('priorityChart'), {
     type: 'doughnut',
     data: {
-      labels: labels.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
-      datasets: [{ data: values, backgroundColor: colors, borderWidth: 2, borderColor: '#0f2044' }]
+      labels: pLabels.map(l => l.toUpperCase()),
+      datasets: [{ data: pValues, backgroundColor: pColors, borderWidth: 0 }]
     },
     options: {
-      ...chartDefaults,
-      cutout: '65%',
-      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } } }
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 10 } } }
     }
   });
-}
 
-function buildDeptChart(workload) {
-  const labels = Object.keys(workload);
-  const values = Object.values(workload);
-  if (deptChart) deptChart.destroy();
-  deptChart = new Chart(document.getElementById('deptChart'), {
+  // Department Workload Chart
+  const dLabels = Object.keys(data.department_workload);
+  const dValues = Object.values(data.department_workload);
+
+  if (dChart) dChart.destroy();
+  dChart = new Chart(document.getElementById('deptChart'), {
     type: 'bar',
     data: {
-      labels,
+      labels: dLabels,
       datasets: [{
         label: 'Appointments',
-        data: values,
-        backgroundColor: 'rgba(26,86,219,0.7)',
-        borderColor: '#1a56db',
-        borderWidth: 1,
-        borderRadius: 6
+        data: dValues,
+        backgroundColor: '#1a56db',
+        borderRadius: 4
       }]
     },
     options: {
-      ...chartDefaults,
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
         y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
       }
     }
   });
-}
 
-function buildDoctorChart(utilData) {
-  const labels = utilData.map(d => d.name.replace('Dr. ', ''));
-  const values = utilData.map(d => d.utilization);
-  if (doctorChart) doctorChart.destroy();
-  doctorChart = new Chart(document.getElementById('doctorChart'), {
+  // Doctor Utilization Chart
+  const docLabels = data.doctor_utilization.map(d => d.name.replace('Dr. ', ''));
+  const docValues = data.doctor_utilization.map(d => d.utilization);
+
+  if (docChart) docChart.destroy();
+  docChart = new Chart(document.getElementById('doctorChart'), {
     type: 'bar',
     data: {
-      labels,
+      labels: docLabels,
       datasets: [{
         label: 'Utilization %',
-        data: values,
-        backgroundColor: values.map(v => v > 80 ? '#ef4444' : v > 50 ? '#f59e0b' : '#10b981'),
-        borderRadius: 6,
-        borderWidth: 0
+        data: docValues,
+        backgroundColor: docValues.map(v => v >= 90 ? '#ef4444' : (v >= 60 ? '#10b981' : '#06b6d4')),
+        borderRadius: 4
       }]
     },
     options: {
-      indexAxis: 'y',
-      ...chartDefaults,
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
       scales: {
-        x: { max: 100, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } }
+        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
+        y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true, max: 100 }
       }
     }
   });
 }
 
-loadDashboard();
+document.addEventListener('DOMContentLoaded', loadDashboard);
 </script>
 {% endblock %}

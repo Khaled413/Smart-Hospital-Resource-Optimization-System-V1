@@ -118,7 +118,7 @@
       <thead>
         <tr>
           <th>#</th><th>Patient</th><th>Priority</th><th>Doctor</th>
-          <th>Room</th><th>Start</th><th>End</th><th>Wait Time</th>
+          <th>Room</th><th>Start</th><th>End</th><th>Duration</th><th>Wait Time</th>
         </tr>
       </thead>
       <tbody id="schedule-body"></tbody>
@@ -236,6 +236,7 @@ function showResults(result) {
       <td><span style="color:var(--accent)">${a.room_number}</span></td>
       <td>${formatTime(a.start_time)}</td>
       <td>${formatTime(a.end_time)}</td>
+      <td><span style="font-size:12px;color:var(--text-muted)">⏱️ ${a.duration_minutes || 30} min</span></td>
       <td><span style="color:${a.waiting_time > 60 ? '#ef4444' : '#10b981'}">${a.waiting_time} min</span></td>
     </tr>`).join('');
 }

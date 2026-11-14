@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Smart Hospital Optimizer{% endblock %}</title>
-  <meta name="description" content="Smart Hospital Resource Optimization System - AI-powered scheduling and resource allocation">
+  <title>{% block title %}Smart Hospital Optimizer — MediOptim Pro{% endblock %}</title>
+  <meta name="description" content="Smart Hospital Resource Optimization System - AI-powered scheduling, beds, equipment & emergency preemption">
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   {% block extra_head %}{% endblock %}
@@ -17,29 +17,35 @@
     <div class="logo-icon">🏥</div>
     <div class="logo-text">
       <span class="app-name">MediOptim Pro</span>
-      <span class="app-sub">Hospital Resource System</span>
+      <span class="app-sub" data-i18n="app_sub">Smart Hospital System</span>
     </div>
   </div>
 
   <div class="sidebar-nav">
-    <div class="nav-section-title">Overview</div>
-    <a class="nav-item" href="/"><span class="nav-icon">📊</span> Dashboard</a>
-    <a class="nav-item" href="/analytics"><span class="nav-icon">📈</span> Analytics</a>
+    <div class="nav-section-title" data-i18n="nav_overview">Overview</div>
+    <a class="nav-item" href="/"><span class="nav-icon">📊</span> <span data-i18n="nav_dashboard">Dashboard</span></a>
+    <a class="nav-item" href="/analytics"><span class="nav-icon">📈</span> <span data-i18n="nav_analytics">Analytics</span></a>
 
-    <div class="nav-section-title">Resources</div>
-    <a class="nav-item" href="/patients"><span class="nav-icon">🧑‍⚕️</span> Patients</a>
-    <a class="nav-item" href="/doctors"><span class="nav-icon">👨‍⚕️</span> Doctors</a>
-    <a class="nav-item" href="/rooms"><span class="nav-icon">🚪</span> Rooms</a>
-    <a class="nav-item" href="/departments"><span class="nav-icon">🏢</span> Departments</a>
+    <div class="nav-section-title" data-i18n="nav_resources">Resources</div>
+    <a class="nav-item" href="/patients"><span class="nav-icon">🧑‍⚕️</span> <span data-i18n="nav_patients">Patients</span></a>
+    <a class="nav-item" href="/doctors"><span class="nav-icon">👨‍⚕️</span> <span data-i18n="nav_doctors">Doctors</span></a>
+    <a class="nav-item" href="/rooms"><span class="nav-icon">🚪</span> <span data-i18n="nav_rooms">Rooms</span></a>
+    <a class="nav-item" href="/beds"><span class="nav-icon">🛏️</span> <span data-i18n="nav_beds">Inpatient Beds</span></a>
+    <a class="nav-item" href="/equipment"><span class="nav-icon">🩺</span> <span data-i18n="nav_equipment">Equipment</span></a>
+    <a class="nav-item" href="/departments"><span class="nav-icon">🏢</span> <span data-i18n="nav_departments">Departments</span></a>
 
-    <div class="nav-section-title">Scheduling</div>
-    <a class="nav-item" href="/appointments"><span class="nav-icon">📅</span> Appointments</a>
-    <a class="nav-item" href="/optimize"><span class="nav-icon">⚡</span> Optimization</a>
-    <a class="nav-item" href="/history"><span class="nav-icon">🕓</span> Run History</a>
+    <div class="nav-section-title" data-i18n="nav_scheduling">Scheduling & AI</div>
+    <a class="nav-item" href="/appointments"><span class="nav-icon">📅</span> <span data-i18n="nav_appointments">Appointments & Timeline</span></a>
+    <a class="nav-item" href="/optimize"><span class="nav-icon">⚡</span> <span data-i18n="nav_optimize">AI Optimization</span></a>
+    <a class="nav-item" href="/simulator"><span class="nav-icon">🧪</span> <span data-i18n="nav_simulator">Crisis Simulator</span></a>
+    <a class="nav-item" href="/history"><span class="nav-icon">🕓</span> <span data-i18n="nav_history">Run History</span></a>
+
+    <div class="nav-section-title" data-i18n="nav_public">Public Displays</div>
+    <a class="nav-item" href="/queue-display" target="_blank"><span class="nav-icon">📺</span> <span data-i18n="nav_display">Waiting Hall Monitor</span></a>
   </div>
 
   <div class="sidebar-footer">
-    <div style="font-size:10px;color:var(--text-muted);">Smart Hospital Optimizer v1.0</div>
+    <div style="font-size:11px;color:var(--text-muted);">MediOptim Pro v2.0 Enterprise</div>
   </div>
 </nav>
 
@@ -51,7 +57,26 @@
       <div class="page-title">{% block page_title %}Dashboard{% endblock %}</div>
       <div class="page-subtitle">{% block page_subtitle %}Real-time hospital resource overview{% endblock %}</div>
     </div>
+
     <div class="header-actions">
+      <!-- Emergency Code Red Fast Trigger -->
+      <button class="btn btn-emergency" onclick="openEmergencyModal()">
+        🚨 <span data-i18n="btn_emergency">Code Red Walk-In</span>
+      </button>
+
+      <!-- Theme Toggle (Clinical Light / Dark) -->
+      <button class="btn btn-outline btn-sm" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Hospital Light / Dark Theme">
+        <span id="theme-icon">☀️</span>
+      </button>
+
+      <!-- Language Toggle -->
+      <button class="btn btn-outline btn-sm" id="lang-toggle-btn" onclick="toggleLanguage()">
+        🌐 <span id="lang-label">عربي</span>
+      </button>
+
+      <!-- Auth Profile / Login -->
+      <div id="auth-status-container" style="display:flex;align-items:center;gap:8px;"></div>
+
       <div class="header-date" id="current-date"></div>
       {% block header_actions %}{% endblock %}
     </div>
@@ -61,6 +86,78 @@
   <main class="page-body">
     {% block content %}{% endblock %}
   </main>
+</div>
+
+<!-- Emergency Code Red Modal -->
+<div class="modal-overlay" id="emergency-modal">
+  <div class="modal" style="border: 2px solid #ef4444; max-width: 580px;">
+    <div class="modal-header" style="background: rgba(239, 68, 68, 0.1);">
+      <div class="modal-title" style="color: #ef4444; display:flex; align-items:center; gap:8px;">
+        🚨 <span data-i18n="emergency_modal_title">Emergency Code Red Walk-In</span>
+      </div>
+      <button class="modal-close" onclick="Modal.close('emergency-modal')">✕</button>
+    </div>
+    <form id="emergency-form" onsubmit="submitEmergencyWalkin(event)">
+      <div style="background:rgba(239,68,68,0.08);padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;color:#fca5a5">
+        ⚠️ <strong>Priority Level 1 (Resuscitation)</strong>: This action preempts lower-priority scheduled slots and allocates the earliest available physician & surgical/consultation room immediately.
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label" data-i18n="patient_name">Patient Name *</label>
+          <input class="form-control" id="em-name" placeholder="e.g. John Doe" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="patient_age">Age *</label>
+          <input class="form-control" id="em-age" type="number" min="0" max="120" value="45" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="patient_gender">Gender *</label>
+          <select class="form-control" id="em-gender" required>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="specialization">Required Specialization *</label>
+          <select class="form-control" id="em-spec" required>
+            <option value="Cardiology">Cardiology</option>
+            <option value="General Surgery">General Surgery</option>
+            <option value="Neurology">Neurology</option>
+            <option value="Pediatrics">Pediatrics</option>
+            <option value="Orthopedics">Orthopedics</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" data-i18n="emergency_condition">Emergency Condition / Symptoms *</label>
+        <textarea class="form-control" id="em-condition" rows="2" placeholder="e.g. Severe acute chest pain, ST elevation suspected" required></textarea>
+      </div>
+      <div class="form-grid" style="grid-template-columns: repeat(4, 1fr);">
+        <div class="form-group">
+          <label class="form-label">BP (mmHg)</label>
+          <input class="form-control" id="em-bp" value="160/100">
+        </div>
+        <div class="form-group">
+          <label class="form-label">HR (bpm)</label>
+          <input class="form-control" id="em-hr" type="number" value="115">
+        </div>
+        <div class="form-group">
+          <label class="form-label">SpO2 (%)</label>
+          <input class="form-control" id="em-spo2" type="number" value="92">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Temp (°C)</label>
+          <input class="form-control" id="em-temp" type="number" step="0.1" value="37.8">
+        </div>
+      </div>
+      <div class="modal-actions" style="margin-top:20px;display:flex;justify-content:flex-end;gap:10px">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('emergency-modal')">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="em-submit-btn">
+          ⚡ Execute Emergency Admission
+        </button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <!-- Toast Container -->

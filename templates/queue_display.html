@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clinic Waiting Hall Monitor — MediOptim Pro</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body {
+      background: #090d16;
+      color: #f8fafc;
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 24px;
+      overflow-x: hidden;
+    }
+    .display-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+      margin-bottom: 28px;
+    }
+    .hospital-title {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .hospital-title h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #60a5fa, #38bdf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .clock-display {
+      font-size: 28px;
+      font-weight: 700;
+      font-family: monospace;
+      color: #38bdf8;
+    }
+    .queue-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+    }
+    .now-serving-card {
+      background: linear-gradient(135deg, rgba(30, 58, 138, 0.4), rgba(15, 23, 42, 0.8));
+      border: 2px solid #3b82f6;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+    .serving-row {
+      display: grid;
+      grid-template-columns: 100px 2fr 2fr 1.5fr;
+      padding: 16px;
+      margin-bottom: 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      align-items: center;
+      border-left: 6px solid #10b981;
+    }
+    .serving-row.emergency {
+      border-left-color: #ef4444;
+      background: rgba(239, 68, 68, 0.12);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.8; }
+      100% { opacity: 1; }
+    }
+    .next-list-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 20px;
+    }
+    .next-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 15px;
+    }
+    .news-ticker {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #1e293b;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+
+<div class="display-header">
+  <div class="hospital-title">
+    <span style="font-size:40px">🏥</span>
+    <div>
+      <h1>MediOptim Pro — Smart Hospital Clinic Queue</h1>
+      <div style="font-size:13px;color:#94a3b8">Real-Time Patient Calling & Clinic Allocation Board</div>
+    </div>
+  </div>
+  <div style="text-align:right">
+    <div class="clock-display" id="live-clock">--:--:--</div>
+    <div style="font-size:12px;color:#64748b" id="live-date"></div>
+  </div>
+</div>
+
+<div class="queue-grid">
+  <!-- Left: Currently Called & Serving -->
+  <div class="now-serving-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+      <div style="font-size:20px;font-weight:800;color:#60a5fa;display:flex;align-items:center;gap:8px">
+        <span>📢</span> CURRENTLY SERVING / PLEASE PROCEED TO CLINIC
+      </div>
+      <span class="badge badge-success" style="font-size:13px;padding:6px 12px">LIVE FEED</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:100px 2fr 2fr 1.5fr;padding:0 16px 8px 16px;font-size:12px;color:#64748b;font-weight:700">
+      <span>TICKET</span>
+      <span>PATIENT INITIALS</span>
+      <span>PHYSICIAN</span>
+      <span>ROOM / CLINIC</span>
+    </div>
+
+    <div id="serving-container">
+      <div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">Loading queue...</div></div>
+    </div>
+  </div>
+
+  <!-- Right: Next In Line -->
+  <div class="next-list-card">
+    <div style="font-size:18px;font-weight:700;margin-bottom:16px;color:#f59e0b;display:flex;align-items:center;gap:8px">
+      <span>⏳</span> NEXT IN LINE (BE READY)
+    </div>
+    <div id="next-container">
+      <div class="empty-state"><div class="empty-title">Loading next queue...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Ticker -->
+<div class="news-ticker">
+  <span style="font-weight:700;color:#38bdf8;white-space:nowrap">🏥 ANNOUNCEMENT:</span>
+  <marquee behavior="scroll" direction="left" scrollamount="6">
+    Emergency Code Red patients are prioritized automatically by medical triage protocols • Please have your insurance and identification cards ready when called • Free hospital Wi-Fi: MediOptim-Guest
+  </marquee>
+</div>
+
+<script>
+function maskName(name) {
+  if (!name) return 'Patient';
+  const parts = name.trim().split(' ');
+  if (parts.length === 1) return parts[0][0] + '***';
+  return parts[0][0] + '*** ' + parts[parts.length - 1][0] + '.';
+}
+
+function updateClock() {
+  const now = new Date();
+  document.getElementById('live-clock').textContent = now.toLocaleTimeString();
+  document.getElementById('live-date').textContent = now.toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+async function fetchQueue() {
+  try {
+    const res = await fetch('/api/appointments');
+    const appts = await res.json();
+    const today = new Date().toISOString().split('T')[0];
+    const todayAppts = appts.filter(a => a.date === today && a.status !== 'cancelled');
+
+    const serving = todayAppts.slice(0, 6);
+    const nextInLine = todayAppts.slice(6, 16);
+
+    const sContainer = document.getElementById('serving-container');
+    if (!serving.length) {
+      sContainer.innerHTML = '<div class="empty-state"><div class="empty-title">No active consultations in progress</div></div>';
+    } else {
+      sContainer.innerHTML = serving.map((a, i) => `
+        <div class="serving-row ${a.is_emergency ? 'emergency' : ''}">
+          <div style="font-size:22px;font-weight:800;color:${a.is_emergency ? '#ef4444' : '#60a5fa'}">#${a.id}</div>
+          <div>
+            <div style="font-size:18px;font-weight:700">${maskName(a.patient_name)}</div>
+            ${a.is_emergency ? '<span style="font-size:11px;color:#ef4444;font-weight:700">🚨 EMERGENCY CODE RED</span>' : ''}
+          </div>
+          <div>
+            <div style="font-weight:600">${a.doctor_name}</div>
+            <div style="font-size:12px;color:#94a3b8">${a.doctor_specialization}</div>
+          </div>
+          <div>
+            <div style="font-size:20px;font-weight:800;color:#38bdf8">Room ${a.room_number}</div>
+            <div style="font-size:11px;color:#94a3b8">${a.start_time} - ${a.end_time}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    const nContainer = document.getElementById('next-container');
+    if (!nextInLine.length) {
+      nContainer.innerHTML = '<div class="empty-state"><div class="empty-desc">No upcoming patients in queue</div></div>';
+    } else {
+      nContainer.innerHTML = nextInLine.map(a => `
+        <div class="next-item">
+          <div>
+            <span style="font-weight:700;color:#38bdf8;margin-right:8px">#${a.id}</span>
+            <span style="font-weight:600">${maskName(a.patient_name)}</span>
+          </div>
+          <div style="color:#94a3b8;font-size:13px">${a.start_time} (Room ${a.room_number})</div>
+        </div>
+      `).join('');
+    }
+
+  } catch(e) {
+    console.error('Queue poll error', e);
+  }
+}
+
+fetchQueue();
+setInterval(fetchQueue, 5000); // Polling every 5 seconds for live monitor feel
+</script>
+</body>
+</html>

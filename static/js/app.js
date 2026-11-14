@@ -1,6 +1,6 @@
 /* ============================================================
-   app.js - Core JavaScript Utilities
-   Smart Hospital Resource Optimization System
+   app.js - Enhanced JavaScript Utilities & Localization
+   MediOptim Pro - Smart Hospital Resource Optimization System
    ============================================================ */
 
 // ── Toast Notifications ──────────────────────────────────────
@@ -69,7 +69,7 @@ const API = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `POST ${url} failed: ${res.status}`);
+      throw new Error(err.error || err.message || `POST ${url} failed: ${res.status}`);
     }
     return res.json();
   },
@@ -116,41 +116,19 @@ const Modal = {
   }
 };
 
-// ── Badge Helpers ─────────────────────────────────────────────
-function priorityBadge(priority) {
-  const map = { critical: '🔴 Critical', urgent: '🟠 Urgent', normal: '🟢 Normal', low: '⚪ Low' };
-  return `<span class="badge badge-${priority}">${map[priority] || priority}</span>`;
+// ── Time & Date Helpers ───────────────────────────────────────
+function timeToMinutes(t) {
+  if (!t) return 0;
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
 }
 
-function statusBadge(status) {
-  const map = { scheduled: '📅 Scheduled', completed: '✅ Completed', cancelled: '❌ Cancelled',
-                success: '✅ Success', partial: '⚠️ Partial', failed: '❌ Failed' };
-  return `<span class="badge badge-${status}">${map[status] || status}</span>`;
+function minutesToTime(m) {
+  const h = Math.floor(m / 60);
+  const min = m % 60;
+  return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
 }
 
-function algoBadge(algo) {
-  const map = { lp: '🔢 Linear Programming', greedy: '⚡ Greedy', hybrid: '🔀 Hybrid' };
-  return `<span class="badge badge-${algo}">${map[algo] || algo}</span>`;
-}
-
-// ── Sidebar Active Link ───────────────────────────────────────
-function setActiveSidebarLink() {
-  const path = window.location.pathname;
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.classList.remove('active');
-    const href = item.getAttribute('href');
-    if (href && (path === href || (href !== '/' && path.startsWith(href)))) {
-      item.classList.add('active');
-    }
-  });
-  // Dashboard
-  if (path === '/') {
-    const dash = document.querySelector('.nav-item[href="/"]');
-    if (dash) dash.classList.add('active');
-  }
-}
-
-// ── Date Helpers ──────────────────────────────────────────────
 function todayISO() {
   return new Date().toISOString().split('T')[0];
 }
@@ -164,43 +142,248 @@ function formatTime(t) {
   if (!t) return '—';
   const [h, m] = t.split(':');
   const hour = parseInt(h);
-  return `${hour > 12 ? hour - 12 : hour}:${m} ${hour >= 12 ? 'PM' : 'AM'}`;
+  return `${hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour)}:${m} ${hour >= 12 ? 'PM' : 'AM'}`;
 }
 
-// ── Confirm Dialog ────────────────────────────────────────────
-function confirmAction(message, onConfirm) {
-  if (confirm(message)) onConfirm();
+// ── Badge Helpers ─────────────────────────────────────────────
+function priorityBadge(priority) {
+  const map = { critical: '🔴 Critical', urgent: '🟠 Urgent', normal: '🟢 Normal', low: '⚪ Low' };
+  return `<span class="badge badge-${priority}">${map[priority] || priority}</span>`;
 }
 
-// ── Number Formatter ─────────────────────────────────────────
-function fmtNum(n, decimals = 0) {
-  return Number(n).toFixed(decimals);
+function statusBadge(status) {
+  const map = {
+    scheduled: '📅 Scheduled',
+    in_progress: '⚡ In Progress',
+    completed: '✅ Completed',
+    cancelled: '❌ Cancelled',
+    no_show: '⚠️ No-Show',
+    success: '✅ Success',
+    partial: '⚠️ Partial',
+    failed: '❌ Failed'
+  };
+  return `<span class="badge badge-${status}">${map[status] || status}</span>`;
 }
 
-// ── Chart Color Palette ───────────────────────────────────────
-const CHART_COLORS = {
-  primary: '#1a56db',
-  accent: '#06b6d4',
-  success: '#10b981',
-  warning: '#f59e0b',
-  danger: '#ef4444',
-  info: '#8b5cf6',
-  muted: '#64748b'
+function algoBadge(algo) {
+  const map = { lp: '🔢 Linear Programming', greedy: '⚡ Greedy', hybrid: '🔀 Hybrid' };
+  return `<span class="badge badge-${algo}">${map[algo] || algo}</span>`;
+}
+
+// ── Active Navigation ─────────────────────────────────────────
+function setActiveSidebarLink() {
+  const path = window.location.pathname;
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.classList.remove('active');
+    const href = item.getAttribute('href');
+    if (href && (path === href || (href !== '/' && path.startsWith(href)))) {
+      item.classList.add('active');
+    }
+  });
+  if (path === '/') {
+    const dash = document.querySelector('.nav-item[href="/"]');
+    if (dash) dash.classList.add('active');
+  }
+}
+
+// ── Emergency Code Red Modal & Handler ────────────────────────
+function openEmergencyModal() {
+  Modal.open('emergency-modal');
+}
+
+async function submitEmergencyWalkin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('em-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '⚡ Admitting Code Red...';
+
+  const payload = {
+    name: document.getElementById('em-name').value,
+    age: document.getElementById('em-age').value,
+    gender: document.getElementById('em-gender').value,
+    required_specialization: document.getElementById('em-spec').value,
+    condition_description: document.getElementById('em-condition').value,
+    blood_pressure: document.getElementById('em-bp').value,
+    heart_rate: document.getElementById('em-hr').value,
+    spo2: document.getElementById('em-spo2').value,
+    temperature: document.getElementById('em-temp').value
+  };
+
+  try {
+    const res = await API.post('/api/emergency/walkin', payload);
+    Modal.close('emergency-modal');
+    ToastManager.show(`🚨 Code Red Admitted: Assigned to Dr. ${res.emergency_appointment.doctor_name} in Room ${res.emergency_appointment.room_number}`, 'success', 5000);
+    if (res.bumped_notice) {
+      setTimeout(() => {
+        ToastManager.show(`⚠️ ${res.bumped_notice}`, 'warning', 6000);
+      }, 1200);
+    }
+    // Refresh table or page if function exists
+    if (typeof loadAppts === 'function') loadAppts();
+    if (typeof loadDashboard === 'function') loadDashboard();
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Execute Emergency Admission';
+  }
+}
+
+// ── Auth Status Check ─────────────────────────────────────────
+async function checkAuthStatus() {
+  const container = document.getElementById('auth-status-container');
+  if (!container) return;
+
+  try {
+    const res = await API.get('/api/auth/me');
+    if (res.authenticated && res.user) {
+      const u = res.user;
+      container.innerHTML = `
+        <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);padding:4px 10px;border-radius:20px;font-size:12px">
+          <span>👤</span>
+          <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
+          <span class="badge" style="background:#1a56db;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
+          <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-left:4px" title="Sign Out">✕</button>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <a href="/login" class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 10px">
+          🔑 Sign In
+        </a>
+      `;
+    }
+  } catch(e) {
+    console.error('Auth check error', e);
+  }
+}
+
+async function logoutUser() {
+  try {
+    await API.post('/api/auth/logout', {});
+    ToastManager.show('Logged out successfully', 'info');
+    setTimeout(() => { window.location.href = '/login'; }, 400);
+  } catch(err) {
+    console.error(err);
+  }
+}
+
+// ── Bilingual Localization Dictionary (English / Arabic RTL) ─
+const TRANSLATIONS = {
+  en: {
+    app_sub: 'Smart Hospital System',
+    nav_overview: 'Overview',
+    nav_dashboard: 'Dashboard',
+    nav_analytics: 'Analytics',
+    nav_resources: 'Resources',
+    nav_patients: 'Patients',
+    nav_doctors: 'Doctors',
+    nav_rooms: 'Rooms',
+    nav_beds: 'Inpatient Beds',
+    nav_equipment: 'Equipment',
+    nav_departments: 'Departments',
+    nav_scheduling: 'Scheduling & AI',
+    nav_appointments: 'Appointments & Timeline',
+    nav_optimize: 'AI Optimization',
+    nav_simulator: 'Crisis Simulator',
+    nav_history: 'Run History',
+    nav_display: 'Waiting Hall Monitor',
+    btn_emergency: 'Code Red Walk-In',
+    emergency_modal_title: 'Emergency Code Red Walk-In',
+    patient_name: 'Patient Name *',
+    patient_age: 'Age *',
+    patient_gender: 'Gender *',
+    specialization: 'Required Specialization *',
+    emergency_condition: 'Emergency Condition / Symptoms *',
+    export_csv: 'Export CSV'
+  },
+  ar: {
+    app_sub: 'نظام إدارة المستشفيات الذكي',
+    nav_overview: 'نظرة عامة',
+    nav_dashboard: 'لوحة التحكم الرئيسية',
+    nav_analytics: 'التحليلات والمؤشرات',
+    nav_resources: 'الموارد الطبية',
+    nav_patients: 'دليل المرضى',
+    nav_doctors: 'الأطباء والعيادات',
+    nav_rooms: 'الغرف والعمليات',
+    nav_beds: 'أسرّة التنويم',
+    nav_equipment: 'الأجهزة الطبية',
+    nav_departments: 'الأقسام التخصصية',
+    nav_scheduling: 'الجدولة والذكاء الاصطناعي',
+    nav_appointments: 'المواعيد والمخطط الزمني',
+    nav_optimize: 'خوارزميات التحسين',
+    nav_simulator: 'محاكي الأزمات',
+    nav_history: 'سجل العمليات',
+    nav_display: 'شاشة صالة الانتظار',
+    btn_emergency: 'طوارئ كود أحمر',
+    emergency_modal_title: 'تسجيل حالة طوارئ حرجة (كود أحمر)',
+    patient_name: 'اسم المريض *',
+    patient_age: 'العمر *',
+    patient_gender: 'الجنس *',
+    specialization: 'التخصص المطلوب *',
+    emergency_condition: 'الأعراض والحالة الطارئة *',
+    export_csv: 'تصدير كملف CSV'
+  }
 };
 
-const PRIORITY_COLORS = {
-  critical: '#ef4444',
-  urgent: '#f59e0b',
-  normal: '#10b981',
-  low: '#64748b'
-};
+let currentLang = localStorage.getItem('preferred_lang') || 'en';
 
-// ── Init on DOM ready ─────────────────────────────────────────
+function applyLanguage(lang) {
+  currentLang = lang;
+  localStorage.setItem('preferred_lang', lang);
+
+  const dict = TRANSLATIONS[lang] || TRANSLATIONS.en;
+  if (lang === 'ar') {
+    document.body.classList.add('rtl');
+    document.documentElement.setAttribute('dir', 'rtl');
+    document.documentElement.setAttribute('lang', 'ar');
+    const label = document.getElementById('lang-label');
+    if (label) label.textContent = 'English';
+  } else {
+    document.body.classList.remove('rtl');
+    document.documentElement.setAttribute('dir', 'ltr');
+    document.documentElement.setAttribute('lang', 'en');
+    const label = document.getElementById('lang-label');
+    if (label) label.textContent = 'عربي';
+  }
+
+  // Translate all matching data-i18n elements
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (dict[key]) el.textContent = dict[key];
+  });
+}
+
+function toggleLanguage() {
+  const next = currentLang === 'en' ? 'ar' : 'en';
+  applyLanguage(next);
+}
+
+// ── Theme Switcher (Clinical Light / Dark) ───────────────────
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('theme-light');
+  localStorage.setItem('preferred_theme', isLight ? 'light' : 'dark');
+  const icon = document.getElementById('theme-icon');
+  if (icon) icon.textContent = isLight ? '🌙' : '☀️';
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('preferred_theme');
+  if (saved === 'light') {
+    document.body.classList.add('theme-light');
+    const icon = document.getElementById('theme-icon');
+    if (icon) icon.textContent = '🌙';
+  }
+}
+
+// ── DOM Ready Initialization ──────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   ToastManager.init();
   setActiveSidebarLink();
+  initTheme();
+  checkAuthStatus();
+  applyLanguage(currentLang);
 
-  // Update date display
   const dateEl = document.getElementById('current-date');
   if (dateEl) {
     dateEl.textContent = new Date().toLocaleDateString('en-US', {
@@ -208,7 +391,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Close modals on overlay click
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', e => {
       if (e.target === overlay) overlay.classList.remove('active');

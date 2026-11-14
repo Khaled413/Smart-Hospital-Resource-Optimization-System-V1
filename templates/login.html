@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — MediOptim Pro</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #090d16;
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+    }
+    .login-container {
+      width: 100%;
+      max-width: 440px;
+      padding: 20px;
+    }
+    .login-box {
+      background: #0f172a;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    }
+    .demo-role-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #94a3b8;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .demo-role-btn:hover {
+      background: rgba(26, 86, 219, 0.2);
+      border-color: #1a56db;
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+
+<div class="login-container">
+  <div class="login-box">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-size:42px;margin-bottom:8px">🏥</div>
+      <h2 style="margin:0;font-size:22px;color:#f8fafc">MediOptim Pro</h2>
+      <div style="font-size:13px;color:#64748b;margin-top:4px">Smart Hospital Resource Optimization System</div>
+    </div>
+
+    <!-- Quick Demo Logins -->
+    <div style="margin-bottom:20px;background:rgba(255,255,255,0.02);padding:12px;border-radius:8px;border:1px dashed rgba(255,255,255,0.1)">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;text-align:center">⚡ Quick Auto-Fill Demo Accounts:</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <button type="button" class="demo-role-btn" onclick="fillCreds('admin', 'admin123')">👑 Admin</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('dr_sarah', 'doctor123')">👨‍⚕️ Dr. Sarah</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('manager', 'manager123')">🏢 Operations Mgr</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('receptionist', 'reception123')">📋 Receptionist</button>
+      </div>
+    </div>
+
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label class="form-label">Username or Email</label>
+        <input class="form-control" id="login-username" placeholder="e.g. admin" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-control" type="password" id="login-password" placeholder="••••••••" required>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg w-full" style="justify-content:center;margin-top:20px" id="login-btn">
+        Sign In
+      </button>
+
+      <div style="text-align:center;margin-top:16px">
+        <a href="/" style="font-size:12px;color:#64748b;text-decoration:none">← Return to Dashboard as Guest</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+<script src="/static/js/app.js"></script>
+<script>
+function fillCreds(u, p) {
+  document.getElementById('login-username').value = u;
+  document.getElementById('login-password').value = p;
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const u = document.getElementById('login-username').value;
+  const p = document.getElementById('login-password').value;
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.textContent = 'Authenticating...';
+
+  try {
+    const res = await API.post('/api/auth/login', { username: u, password: p });
+    ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
+    setTimeout(() => {
+      window.location.href = '/';
+    }, 600);
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+</script>
+</body>
+</html>

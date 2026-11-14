@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 420" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070d1e"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="950" height="420" rx="16" fill="url(#bg2)"/>
+
+  <text x="40" y="45" font-family="Inter, sans-serif" font-size="20" font-weight="800" fill="#ffffff">CODE RED &amp; CLINICAL TRIAGE PREEMPTION WORKFLOW</text>
+  <text x="40" y="68" font-family="Inter, sans-serif" font-size="12" fill="#94a3b8">Real-time Emergency Severity Index (ESI) &amp; Automated Doctor/Room Bumping Logic</text>
+
+  <!-- Step 1 -->
+  <g transform="translate(40, 110)">
+    <rect width="180" height="90" rx="10" fill="#0b1736" stroke="#0284c7" stroke-width="1.5"/>
+    <text x="90" y="32" font-family="Inter, sans-serif" font-size="20" text-anchor="middle">🚑</text>
+    <text x="90" y="55" font-family="Inter, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">1. Patient Arrival</text>
+    <text x="90" y="74" font-family="Inter, sans-serif" font-size="11" fill="#94a3b8" text-anchor="middle">Emergency Walk-In / ER</text>
+  </g>
+
+  <!-- Arrow 1 -->
+  <path d="M 220 155 L 260 155" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)"/>
+  <polygon points="260,150 270,155 260,160" fill="#38bdf8"/>
+
+  <!-- Step 2 -->
+  <g transform="translate(270, 110)">
+    <rect width="180" height="90" rx="10" fill="#1f1118" stroke="#ef4444" stroke-width="1.5"/>
+    <text x="90" y="32" font-family="Inter, sans-serif" font-size="20" text-anchor="middle">🩺</text>
+    <text x="90" y="55" font-family="Inter, sans-serif" font-size="13" font-weight="700" fill="#ef4444" text-anchor="middle">2. ESI-1/2 Triage</text>
+    <text x="90" y="74" font-family="Inter, sans-serif" font-size="11" fill="#fca5a5" text-anchor="middle">Vitals: SpO2, BP, HR Check</text>
+  </g>
+
+  <!-- Arrow 2 -->
+  <polygon points="490,150 500,155 490,160" fill="#38bdf8"/>
+  <line x1="450" y1="155" x2="490" y2="155" stroke="#38bdf8" stroke-width="2"/>
+
+  <!-- Decision Node -->
+  <g transform="translate(500, 110)">
+    <polygon points="90,10 170,55 90,100 10,55" fill="#132448" stroke="#38bdf8" stroke-width="1.5"/>
+    <text x="90" y="50" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Immediate</text>
+    <text x="90" y="66" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Slot Free?</text>
+  </g>
+
+  <!-- YES Branch -> Top Right -->
+  <line x1="670" y1="155" x2="730" y2="155" stroke="#10b981" stroke-width="2"/>
+  <polygon points="725,150 735,155 725,160" fill="#10b981"/>
+  <text x="690" y="145" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#10b981">YES</text>
+
+  <g transform="translate(735, 110)">
+    <rect width="175" height="90" rx="10" fill="#08281d" stroke="#10b981" stroke-width="1.5"/>
+    <text x="87" y="32" font-family="Inter, sans-serif" font-size="20" text-anchor="middle">⚡</text>
+    <text x="87" y="55" font-family="Inter, sans-serif" font-size="13" font-weight="700" fill="#10b981" text-anchor="middle">Instant Admission</text>
+    <text x="87" y="74" font-family="Inter, sans-serif" font-size="11" fill="#a7f3d0" text-anchor="middle">Book open doctor &amp; room</text>
+  </g>
+
+  <!-- NO Branch -> Bottom Branch -->
+  <line x1="590" y1="210" x2="590" y2="280" stroke="#f59e0b" stroke-width="2"/>
+  <polygon points="585,275 590,285 595,275" fill="#f59e0b"/>
+  <text x="605" y="250" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#f59e0b">NO (Fully Booked)</text>
+
+  <!-- Preemption Box -->
+  <g transform="translate(480, 285)">
+    <rect width="220" height="95" rx="10" fill="#2b1408" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="110" y="28" font-family="Inter, sans-serif" font-size="16" text-anchor="middle">⚠️</text>
+    <text x="110" y="50" font-family="Inter, sans-serif" font-size="13" font-weight="700" fill="#f59e0b" text-anchor="middle">Auto-Preempt Slot</text>
+    <text x="110" y="70" font-family="Inter, sans-serif" font-size="11" fill="#fed7aa" text-anchor="middle">Locate earliest Normal/Low slot</text>
+    <text x="110" y="85" font-family="Inter, sans-serif" font-size="10" fill="#fed7aa" text-anchor="middle">Bump &amp; shift displaced patient</text>
+  </g>
+
+  <!-- Connect Preemption to Admission -->
+  <path d="M 700 332 L 822 332 L 822 205" fill="none" stroke="#ef4444" stroke-width="2" stroke-dasharray="4,4"/>
+  <polygon points="817,205 822,195 827,205" fill="#ef4444"/>
+  <text x="730" y="322" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#ef4444">Admit Emergency Immediately</text>
+</svg>

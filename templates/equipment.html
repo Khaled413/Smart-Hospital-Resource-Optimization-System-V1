@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Medical Equipment Tracking — MediOptim Pro{% endblock %}
+{% block page_title %}Medical Equipment Inventory{% endblock %}
+{% block page_subtitle %}Track critical medical devices, ICU ventilators, imaging suites & maintenance status{% endblock %}
+{% block header_actions %}
+<button class="btn btn-primary" onclick="Modal.open('add-equipment-modal')">➕ Add Equipment</button>
+{% endblock %}
+
+{% block content %}
+<!-- Stats Row -->
+<div class="stats-grid" id="eq-stats" style="margin-bottom:24px">
+  <div class="stat-card" style="--card-accent:#1a56db;--card-bg:rgba(26,86,219,0.15)">
+    <div class="stat-icon">🩺</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-total-eq">—</div>
+      <div class="stat-label">Total Devices</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#10b981;--card-bg:rgba(16,185,129,0.15)">
+    <div class="stat-icon">✅</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-avail-eq">—</div>
+      <div class="stat-label">Available / Operational</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#06b6d4;--card-bg:rgba(6,182,212,0.15)">
+    <div class="stat-icon">⚡</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-inuse-eq">—</div>
+      <div class="stat-label">In Use</div>
+    </div>
+  </div>
+  <div class="stat-card" style="--card-accent:#ef4444;--card-bg:rgba(239,68,68,0.15)">
+    <div class="stat-icon">🔧</div>
+    <div class="stat-info">
+      <div class="stat-value" id="stat-maint-eq">—</div>
+      <div class="stat-label">In Maintenance</div>
+    </div>
+  </div>
+</div>
+
+<!-- Equipment Grid -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">🔬 Medical Device Fleet</div>
+  </div>
+  <div id="equipment-container" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:16px;padding:16px 0;">
+    <div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">Loading equipment...</div></div>
+  </div>
+</div>
+
+<!-- Add Equipment Modal -->
+<div class="modal-overlay" id="add-equipment-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">➕ Register Medical Device</div>
+      <button class="modal-close" onclick="Modal.close('add-equipment-modal')">✕</button>
+    </div>
+    <form id="eq-form" onsubmit="saveEquipment(event)">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Device Name / Model *</label>
+          <input class="form-control" id="eq-name" placeholder="e.g. Siemens Magnetom 3T MRI" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Device Category *</label>
+          <select class="form-control" id="eq-type" required>
+            <option value="ventilator">Ventilator (ICU)</option>
+            <option value="mri">MRI Scanner</option>
+            <option value="ct_scanner">CT Scanner</option>
+            <option value="ecg">12-Lead ECG</option>
+            <option value="surgical_kit">Surgical Tower</option>
+            <option value="ultrasound">Ultrasound / C-Arm</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Department *</label>
+          <select class="form-control" id="eq-dept" required>
+            <option value="">Select department...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Assigned Room</label>
+          <select class="form-control" id="eq-room">
+            <option value="">Mobile / Portable (No fixed room)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Notes & Calibration Info</label>
+        <textarea class="form-control" id="eq-notes" rows="2" placeholder="e.g. Annual calibration completed, certified sterile"></textarea>
+      </div>
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('add-equipment-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Device</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allEquip = [];
+let allDepts = [];
+let allRooms = [];
+
+async function loadEquipment() {
+  try {
+    const [eq, depts, rooms] = await Promise.all([
+      API.get('/api/equipment'),
+      API.get('/api/departments'),
+      API.get('/api/rooms')
+    ]);
+    allEquip = eq;
+    allDepts = depts;
+    allRooms = rooms;
+
+    // Populate dropdowns
+    document.getElementById('eq-dept').innerHTML = '<option value="">Select department...</option>' +
+      depts.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+    document.getElementById('eq-room').innerHTML = '<option value="">Mobile / Portable (No fixed room)</option>' +
+      rooms.map(r => `<option value="${r.id}">Room ${r.room_number}</option>`).join('');
+
+    updateStats();
+    renderEquipment();
+  } catch(e) {
+    ToastManager.show('Failed to load equipment', 'error');
+  }
+}
+
+function updateStats() {
+  const total = allEquip.length;
+  const avail = allEquip.filter(e => e.status === 'available').length;
+  const inuse = allEquip.filter(e => e.status === 'in_use').length;
+  const maint = allEquip.filter(e => e.status === 'maintenance').length;
+
+  document.getElementById('stat-total-eq').textContent = total;
+  document.getElementById('stat-avail-eq').textContent = avail;
+  document.getElementById('stat-inuse-eq').textContent = inuse;
+  document.getElementById('stat-maint-eq').textContent = maint;
+}
+
+function renderEquipment() {
+  const container = document.getElementById('equipment-container');
+  if (!allEquip.length) {
+    container.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="empty-icon">🩺</div>
+      <div class="empty-title">No equipment found</div>
+    </div>`;
+    return;
+  }
+
+  const icons = {
+    ventilator: '🫁',
+    mri: '🧲',
+    ct_scanner: '☢️',
+    ecg: '📈',
+    surgical_kit: '🔪',
+    ultrasound: '🔊'
+  };
+
+  const statusMap = {
+    available: { bg: 'rgba(16,185,129,0.1)', text: '#10b981', label: '🟢 Available' },
+    in_use: { bg: 'rgba(6,182,212,0.1)', text: '#06b6d4', label: '⚡ In Use' },
+    maintenance: { bg: 'rgba(239,68,68,0.1)', text: '#ef4444', label: '🔧 Maintenance' }
+  };
+
+  container.innerHTML = allEquip.map(e => {
+    const icon = icons[e.equipment_type] || '🩺';
+    const sc = statusMap[e.status] || statusMap.available;
+    return `
+      <div class="card" style="border-top:3px solid ${sc.text};padding:14px;display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
+            <div style="display:flex;gap:10px;align-items:center">
+              <span style="font-size:24px">${icon}</span>
+              <div>
+                <div style="font-weight:700;font-size:14px">${e.name}</div>
+                <div style="font-size:11px;color:var(--text-muted)">${e.department_name} • ${e.room_number}</div>
+              </div>
+            </div>
+            <span class="badge" style="background:${sc.bg};color:${sc.text};border:1px solid ${sc.text}40">${sc.label}</span>
+          </div>
+          ${e.notes ? `<div style="background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:4px;font-size:11px;color:var(--text-secondary);margin:8px 0">📝 ${e.notes}</div>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;margin-top:12px;border-top:1px solid rgba(255,255,255,0.06);padding-top:10px">
+          ${e.status !== 'available' ? `
+            <button class="btn btn-outline btn-sm w-full" onclick="changeStatus(${e.id}, 'available')">Mark Available</button>
+          ` : ''}
+          ${e.status !== 'in_use' ? `
+            <button class="btn btn-outline btn-sm w-full" onclick="changeStatus(${e.id}, 'in_use')">Deploy / In Use</button>
+          ` : ''}
+          ${e.status !== 'maintenance' ? `
+            <button class="btn btn-danger btn-sm" onclick="changeStatus(${e.id}, 'maintenance')" title="Send to maintenance">🔧</button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function changeStatus(id, status) {
+  try {
+    await API.patch(`/api/equipment/${id}/status`, { status });
+    ToastManager.show(`Status updated to ${status}`, 'success');
+    loadEquipment();
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+async function saveEquipment(e) {
+  e.preventDefault();
+  try {
+    await API.post('/api/equipment', {
+      name: document.getElementById('eq-name').value,
+      equipment_type: document.getElementById('eq-type').value,
+      department_id: document.getElementById('eq-dept').value,
+      room_id: document.getElementById('eq-room').value || null,
+      notes: document.getElementById('eq-notes').value
+    });
+    ToastManager.show('Device registered successfully', 'success');
+    Modal.close('add-equipment-modal');
+    loadEquipment();
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadEquipment);
+</script>
+{% endblock %}

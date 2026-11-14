@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: smart_hospital_optimizer
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=prod
+      - SECRET_KEY=enterprise-smart-hospital-secret-key-prod
+      - DATABASE_URL=sqlite:///instance/hospital.db
+    volumes:
+      - ./instance:/app/instance
