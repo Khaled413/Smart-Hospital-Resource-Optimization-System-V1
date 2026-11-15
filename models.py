@@ -341,7 +341,9 @@ class OptimizationRun(db.Model):
     __tablename__ = 'optimization_runs'
 
     id = db.Column(db.Integer, primary_key=True)
-    algorithm = db.Column(db.String(50), nullable=False)  # lp, greedy, hybrid
+    algorithm = db.Column(db.String(50), nullable=False)  # requested algorithm: lp, greedy, hybrid
+    algorithm_used = db.Column(db.String(50), nullable=True)  # actual algorithm executed: lp, greedy, hybrid
+    fallback_reason = db.Column(db.String(255), nullable=True)
     run_date = db.Column(db.String(20), nullable=False)
     total_patients = db.Column(db.Integer, default=0)
     assigned_patients = db.Column(db.Integer, default=0)
@@ -359,6 +361,8 @@ class OptimizationRun(db.Model):
         return {
             'id': self.id,
             'algorithm': self.algorithm,
+            'algorithm_used': getattr(self, 'algorithm_used', None) or self.algorithm,
+            'fallback_reason': getattr(self, 'fallback_reason', None) or '',
             'run_date': self.run_date,
             'total_patients': self.total_patients,
             'assigned_patients': self.assigned_patients,
