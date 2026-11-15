@@ -58,19 +58,9 @@ def seed_database():
 
     # ── 3. Users (RBAC) ───────────────────────────────────────────────────────
     import os
-    import secrets
 
-    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD')
+    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD', 'Admin#2025!')
     admin_must_change = False
-    if not admin_initial_password:
-        admin_initial_password = secrets.token_urlsafe(12)
-        admin_must_change = True
-        print("\n" + "=" * 65)
-        print("  [SECURITY NOTICE] Generated One-Time Initial Admin Password:")
-        print(f"  Username: admin")
-        print(f"  Password: {admin_initial_password}")
-        print("  Note: Please change this password immediately upon first login.")
-        print("=" * 65 + "\n")
 
     users_data = [
         {

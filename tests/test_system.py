@@ -24,18 +24,18 @@ def client():
     app.config['TESTING'] = True
     app.config['RATELIMIT_ENABLED'] = False
     limiter.enabled = False
-    os.environ['ADMIN_INITIAL_PASSWORD'] = 'admin123'
+    os.environ['ADMIN_INITIAL_PASSWORD'] = 'Admin#2025!'
     with app.test_client() as test_client:
         yield test_client
 
 
-def login_as(client, username='admin', password='admin123'):
+def login_as(client, username='admin', password='Admin#2025!'):
     return client.post('/api/auth/login', json={'username': username, 'password': password})
 
 
 def test_user_authentication(client):
     """Test user password hashing and login API."""
-    res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
+    res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'Admin#2025!'})
     assert res.status_code == 200
     data = res.get_json()
     assert data['user']['username'] == 'admin'
@@ -73,7 +73,7 @@ def test_rbac_and_protected_routes(client):
     assert res_opt.status_code == 403
 
     # 4. Login as admin
-    login_as(client, 'admin', 'admin123')
+    login_as(client, 'admin', 'Admin#2025!')
     res_audit_admin = client.get('/api/audit-logs')
     assert res_audit_admin.status_code == 200
 
@@ -155,7 +155,7 @@ def test_emergency_code_red_preemption(client):
 
 def test_bed_management_api(client):
     """Test bed admission and discharge flow."""
-    login_as(client, 'admin', 'admin123')
+    login_as(client, 'admin', 'Admin#2025!')
     # List beds
     res = client.get('/api/beds')
     assert res.status_code == 200
@@ -242,7 +242,7 @@ def test_priority_triage_synchronization():
 
 def test_api_optimize_atomic_and_excludes_scheduled(client):
     """Verify /api/optimize endpoint excludes already-scheduled patients and operates atomically."""
-    login_as(client, 'admin', 'admin123')
+    login_as(client, 'admin', 'Admin#2025!')
     target_date = "2025-10-10"
 
     # First run: schedules patients
@@ -265,7 +265,7 @@ def test_api_optimize_atomic_and_excludes_scheduled(client):
 
 def test_analytics_utilization_date_filtered(client):
     """Verify /api/analytics/utilization returns date-filtered utilization metrics."""
-    login_as(client, 'admin', 'admin123')
+    login_as(client, 'admin', 'Admin#2025!')
     res = client.get('/api/analytics/utilization?date=2025-10-10')
     assert res.status_code == 200
     util_list = res.get_json()

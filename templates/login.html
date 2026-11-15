@@ -77,12 +77,12 @@
     <div style="margin-bottom:24px;background:#f8fafc;padding:14px;border-radius:12px;border:1px dashed #cbd5e1">
       <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:10px;text-align:center;text-transform:uppercase;letter-spacing:0.5px">⚡ Quick Select Role:</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <button type="button" class="demo-role-btn" onclick="fillUser('admin')">👑 Admin</button>
-        <button type="button" class="demo-role-btn" onclick="fillUser('dr_sarah')">👨‍⚕️ Dr. Sarah</button>
-        <button type="button" class="demo-role-btn" onclick="fillUser('manager')">🏢 Operations</button>
-        <button type="button" class="demo-role-btn" onclick="fillUser('receptionist')">📋 Reception</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('admin', 'Admin#2025!')">👑 Admin</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('dr_sarah', 'Doctor#2025!')">👨‍⚕️ Dr. Sarah</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('manager', 'Manager#2025!')">🏢 Operations</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('receptionist', 'Reception#2025!')">📋 Reception</button>
       </div>
-      <div style="font-size:10.5px;color:#64748b;margin-top:8px;text-align:center">Admin credentials are set via ADMIN_INITIAL_PASSWORD or generated securely on seed.</div>
+      <div style="font-size:10.5px;color:#64748b;margin-top:8px;text-align:center">Click any role to autofill login credentials instantly.</div>
     </div>
 
     <form id="login-form" onsubmit="handleLogin(event)">
