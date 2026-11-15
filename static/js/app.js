@@ -306,11 +306,14 @@ async function checkAuthStatus() {
 
       if (container) {
         container.innerHTML = `
-          <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);padding:4px 10px;border-radius:20px;font-size:12px">
-            <span>👤</span>
-            <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
-            <span class="badge" style="background:#1a56db;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
-            <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-left:4px" title="Sign Out">✕</button>
+          <div style="display:flex;align-items:center;gap:6px;background:#f1f5f9;border:1px solid #e2e8f0;padding:3px 8px 3px 12px;border-radius:20px;font-size:12px">
+            <a href="/profile" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;" title="Profile Settings & Account">
+              <span>👤</span>
+              <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
+              <span class="badge" style="background:#0284c7;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
+            </a>
+            <a href="/profile" style="color:#64748b;text-decoration:none;font-size:13px;padding:2px 4px" title="Profile Settings">⚙️</a>
+            <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:2px 4px;line-height:1;" title="Sign Out">✕</button>
           </div>
         `;
       }
@@ -364,6 +367,11 @@ const TRANSLATIONS = {
     nav_roles: 'Roles & Permissions',
     nav_users: 'Staff & Users',
     nav_display: 'Waiting Hall Monitor',
+    nav_account: 'Account & Settings',
+    nav_profile: 'Profile Settings',
+    profile_title: 'Profile Settings',
+    profile_subtitle: 'Manage your personal information, credentials, and review assigned permissions',
+    save_changes: 'Save Profile Changes',
     btn_emergency: 'Code Red Walk-In',
     emergency_modal_title: 'Emergency Code Red Walk-In',
     patient_name: 'Patient Name *',
@@ -394,6 +402,11 @@ const TRANSLATIONS = {
     nav_roles: 'الأدوار ومصفوفة الصلاحيات',
     nav_users: 'الكادر والمستخدمين',
     nav_display: 'شاشة صالة الانتظار',
+    nav_account: 'الحساب والإعدادات',
+    nav_profile: 'إعدادات البروفايل',
+    profile_title: 'إعدادات الملف الشخصي',
+    profile_subtitle: 'إدارة البيانات الشخصية وتحديث كلمة المرور واستعراض الصلاحيات',
+    save_changes: 'حفظ التعديلات',
     btn_emergency: 'طوارئ كود أحمر',
     emergency_modal_title: 'تسجيل حالة طوارئ حرجة (كود أحمر)',
     patient_name: 'اسم المريض *',

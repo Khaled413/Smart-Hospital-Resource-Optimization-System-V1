@@ -545,6 +545,11 @@ def roles_page():
 def users_page():
     return render_template('users.html')
 
+@app.route('/profile')
+@login_required
+def profile_page():
+    return render_template('profile.html')
+
 @app.route('/change-password')
 @login_required
 def change_password_page():
@@ -664,6 +669,68 @@ def api_change_password():
     return jsonify({
         'message': 'Password updated successfully',
         'must_change_password': False
+    })
+
+
+@app.route('/api/user/profile', methods=['GET'])
+@login_required
+def api_get_profile():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+    
+    data = user.to_dict(include_permissions=True)
+    if user.doctor:
+        data['doctor'] = {
+            'id': user.doctor.id,
+            'name': user.doctor.name,
+            'specialization': user.doctor.specialization,
+            'department_name': user.doctor.department.name if user.doctor.department else ''
+        }
+    return jsonify({'success': True, 'user': data})
+
+
+@app.route('/api/user/profile', methods=['PUT'])
+@login_required
+def api_update_profile():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+
+    data = request.get_json() or {}
+    full_name = (data.get('full_name') or '').strip()
+    email = (data.get('email') or '').strip().lower()
+
+    if not full_name:
+        return jsonify({'error': 'Full name cannot be empty'}), 400
+    if not email or '@' not in email:
+        return jsonify({'error': 'Valid email address is required'}), 400
+
+    existing = User.query.filter(User.email == email, User.id != user.id).first()
+    if existing:
+        return jsonify({'error': 'Email address is already in use by another account'}), 409
+
+    old_name = user.full_name
+    old_email = user.email
+    user.full_name = full_name
+    user.email = email
+
+    if user.doctor and old_name != full_name:
+        user.doctor.name = full_name
+
+    db.session.add(AuditLog(
+        action='UPDATE',
+        resource_type='user',
+        resource_id=user.id,
+        user_name=user.username,
+        details=f"User updated personal profile (name: '{old_name}' -> '{full_name}', email: '{old_email}' -> '{email}')"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': 'Profile updated successfully',
+        'user': user.to_dict(include_permissions=True)
     })
 
 

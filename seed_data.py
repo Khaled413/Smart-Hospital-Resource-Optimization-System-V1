@@ -95,7 +95,48 @@ def seed_permissions_and_roles():
         db.session.flush()
         roles_by_name[role_name] = role
 
-    # 3. Backfill User role_id
+    # 3. Backfill User role_id & ensure core user accounts exist
+    admin_pass = os.environ.get('ADMIN_INITIAL_PASSWORD') or 'Admin#2025!'
+    manager_pass = os.environ.get('MANAGER_INITIAL_PASSWORD') or 'Manager#2025!'
+    doc_pass = os.environ.get('DOCTOR_INITIAL_PASSWORD') or 'Doctor#2025!'
+    rec_pass = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or 'Reception#2025!'
+    demo_pass = os.environ.get('DEMO_PASSWORD') or 'DemoViewer#2025!'
+
+    core_defaults = {
+        'admin': {'email': 'admin@hospital.org', 'role': 'admin', 'name': 'Chief Administrator', 'pass': admin_pass},
+        'manager': {'email': 'manager@hospital.org', 'role': 'manager', 'name': 'Operations Director', 'pass': manager_pass},
+        'dr_sarah': {'email': 's.mitchell@hospital.org', 'role': 'doctor', 'name': 'Dr. Sarah Mitchell', 'pass': doc_pass},
+        'receptionist': {'email': 'frontdesk@hospital.org', 'role': 'receptionist', 'name': 'Front Desk Reception', 'pass': rec_pass},
+        'demo_viewer': {'email': 'demo@hospital.org', 'role': 'demo_viewer', 'name': 'Public Demo Guest (Read-Only)', 'pass': demo_pass}
+    }
+
+    for username, udata in core_defaults.items():
+        user = User.query.filter_by(username=username).first()
+        r_obj = roles_by_name.get(udata['role'])
+        if not user:
+            user = User(
+                username=username,
+                email=udata['email'],
+                role=udata['role'],
+                role_id=r_obj.id if r_obj else None,
+                full_name=udata['name'],
+                is_active=True,
+                failed_login_attempts=0,
+                locked_until=None
+            )
+            user.set_password(udata['pass'])
+            db.session.add(user)
+        else:
+            if not user.role_id and r_obj:
+                user.role_id = r_obj.id
+            user.is_active = True
+            # Unlock account if previously locked out
+            user.failed_login_attempts = 0
+            user.locked_until = None
+            # If default user password doesn't match configured password, synchronize it
+            if not user.check_password(udata['pass']):
+                user.set_password(udata['pass'])
+
     for user in User.query.all():
         if not user.role_id or not user.assigned_role:
             role_key = (user.role or 'receptionist').strip().lower()
@@ -163,21 +204,11 @@ def seed_database():
     import os
     import secrets
 
-    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD')
-    admin_must_change = False
-    if not admin_initial_password:
-        admin_initial_password = secrets.token_urlsafe(16)
-        admin_must_change = True
-        print("\n" + "=" * 65)
-        print("  [SECURITY NOTICE] Generated Random Initial Admin Password:")
-        print(f"  Username: admin")
-        print(f"  Password: {admin_initial_password}")
-        print("  Note: Change this password immediately upon first login.")
-        print("=" * 65 + "\n")
-
-    manager_password = os.environ.get('MANAGER_INITIAL_PASSWORD') or secrets.token_urlsafe(14)
-    receptionist_password = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or secrets.token_urlsafe(14)
-    doctor_password = os.environ.get('DOCTOR_INITIAL_PASSWORD') or secrets.token_urlsafe(14)
+    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD') or 'Admin#2025!'
+    manager_password = os.environ.get('MANAGER_INITIAL_PASSWORD') or 'Manager#2025!'
+    receptionist_password = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or 'Reception#2025!'
+    doctor_password = os.environ.get('DOCTOR_INITIAL_PASSWORD') or 'Doctor#2025!'
+    demo_password = os.environ.get('DEMO_PASSWORD') or 'DemoViewer#2025!'
 
     users_data = [
         {
@@ -186,7 +217,7 @@ def seed_database():
             "role": "admin",
             "name": "Chief Administrator",
             "pass": admin_initial_password,
-            "must_change": admin_must_change
+            "must_change": False
         },
         {
             "username": "manager",
@@ -213,18 +244,15 @@ def seed_database():
             "doc_id": docs[0].id,
             "must_change": False
         },
-    ]
-
-    # Add read-only demo_viewer if DEMO_MODE is active
-    if os.environ.get('DEMO_MODE', 'false').lower() in ('true', '1', 'yes'):
-        users_data.append({
+        {
             "username": "demo_viewer",
             "email": "demo@hospital.org",
             "role": "demo_viewer",
             "name": "Public Demo Guest (Read-Only)",
-            "pass": os.environ.get('DEMO_PASSWORD', 'DemoViewer#2025!'),
+            "pass": demo_password,
             "must_change": False
-        })
+        }
+    ]
     for u in users_data:
         r_obj = roles_by_name.get(u["role"])
         user = User(

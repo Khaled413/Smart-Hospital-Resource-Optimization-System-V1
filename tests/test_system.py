@@ -845,3 +845,46 @@ def test_password_toggle_elements_present(client):
     assert 'data-target="confirm-password"' in html_cp
 
 
+def test_user_profile_settings_and_updates(client):
+    """Verify profile view, retrieval, update, and validation."""
+    # 1. Unauthenticated /profile redirects to /login
+    assert client.get('/profile').status_code == 302
+    assert client.get('/api/user/profile').status_code == 401
+
+    # 2. Login as admin and fetch profile
+    login_as(client, 'admin', 'Admin#2025!')
+    res_page = client.get('/profile')
+    assert res_page.status_code == 200
+    assert 'profile-form' in res_page.get_data(as_text=True)
+
+    res_get = client.get('/api/user/profile')
+    assert res_get.status_code == 200
+    user_data = res_get.get_json()['user']
+    assert user_data['username'] == 'admin'
+    assert user_data['role'] == 'admin'
+    assert 'permissions' in user_data
+
+    # 3. Update profile
+    res_put = client.put('/api/user/profile', json={
+        'full_name': 'Super Admin Lead',
+        'email': 'lead.admin@hospital.org'
+    })
+    assert res_put.status_code == 200
+    assert res_put.get_json()['user']['full_name'] == 'Super Admin Lead'
+    assert res_put.get_json()['user']['email'] == 'lead.admin@hospital.org'
+
+    # 4. Duplicate email validation
+    res_dup = client.put('/api/user/profile', json={
+        'full_name': 'Super Admin Lead',
+        'email': 'manager@hospital.org'
+    })
+    assert res_dup.status_code == 409
+
+    # Revert email
+    client.put('/api/user/profile', json={
+        'full_name': 'Chief Administrator',
+        'email': 'admin@hospital.org'
+    })
+
+
+
