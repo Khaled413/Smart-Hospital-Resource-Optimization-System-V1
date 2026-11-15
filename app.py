@@ -9,7 +9,11 @@ from datetime import datetime, date
 import csv
 import io
 import os
+import secrets
 from functools import wraps
+
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from config import get_config, config_by_name
 from models import (
@@ -28,6 +32,21 @@ from seed_data import seed_database
 app = Flask(__name__)
 env_name = os.environ.get('FLASK_ENV', 'dev')
 app.config.from_object(get_config(env_name))
+
+# ─── Rate Limiter ─────────────────────────────────────────────────────────────
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://"
+)
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Too many requests. Please wait a moment and try again.'}), 429
+    return render_template('login.html', error='Too many requests. Please wait a moment and try again.'), 429
 
 # Handle Vercel / Serverless database persistence & pre-seeding
 IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
@@ -63,6 +82,67 @@ def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static', 'img'), 'logo.png', mimetype='image/png')
 
 
+# ─── CSRF Protection & Security Headers ──────────────────────────────────────
+
+def get_or_create_csrf_token():
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_hex(32)
+    return session['csrf_token']
+
+@app.context_processor
+def inject_csrf_token():
+    return dict(csrf_token=get_or_create_csrf_token)
+
+@app.before_request
+def verify_csrf():
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        # Exempt routes
+        if request.path in ('/api/auth/login', '/login'):
+            return None
+        # Allow testing bypass if test header not provided
+        if app.config.get('TESTING') and not request.headers.get('X-CSRF-Token'):
+            return None
+
+        expected_token = session.get('csrf_token')
+        received_token = request.headers.get('X-CSRF-Token')
+        if not received_token and request.form:
+            received_token = request.form.get('csrf_token')
+        if not received_token and request.is_json:
+            try:
+                body = request.get_json(silent=True) or {}
+                received_token = body.get('csrf_token')
+            except Exception:
+                pass
+
+        if not expected_token or not received_token or not secrets.compare_digest(str(expected_token), str(received_token)):
+            return jsonify({'error': 'CSRF token missing or invalid. Please refresh the page.'}), 403
+
+@app.after_request
+def add_security_headers(response):
+    token = session.get('csrf_token')
+    if token:
+        response.set_cookie(
+            'csrf_token',
+            token,
+            samesite='Lax',
+            secure=app.config.get('SESSION_COOKIE_SECURE', False),
+            httponly=False
+        )
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self';"
+    )
+    return response
+
+
 # ─── Auth & Security Helpers ──────────────────────────────────────────────────
 
 def safe_int(val, default=0):
@@ -87,10 +167,11 @@ def get_current_user():
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
+        if 'user_id' not in session or not get_current_user():
             if request.path.startswith('/api/'):
                 return jsonify({'error': 'Authentication required. Please sign in.'}), 401
-            return redirect(url_for('login_page'))
+            next_url = request.full_path if request.query_string else request.path
+            return redirect(url_for('login_page', next=next_url))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -99,6 +180,8 @@ def role_required(allowed_roles):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            if 'user_id' not in session or not get_current_user():
+                return jsonify({'error': 'Authentication required. Please sign in.'}), 401
             user_role = session.get('role', 'receptionist')
             if user_role not in allowed_roles:
                 return jsonify({'error': f'Access denied. Required roles: {", ".join(allowed_roles)}'}), 403
@@ -128,58 +211,73 @@ def log_audit(action, resource_type, resource_id=None, details=''):
 # ─── Frontend Template Routes ─────────────────────────────────────────────────
 
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
 @app.route('/login')
 def login_page():
+    if 'user_id' in session and get_current_user():
+        return redirect(url_for('index'))
     return render_template('login.html')
 
 @app.route('/patients')
+@login_required
 def patients_page():
     return render_template('patients.html')
 
 @app.route('/doctors')
+@login_required
 def doctors_page():
     return render_template('doctors.html')
 
 @app.route('/rooms')
+@login_required
 def rooms_page():
     return render_template('rooms.html')
 
 @app.route('/departments')
+@login_required
 def departments_page():
     return render_template('departments.html')
 
 @app.route('/appointments')
+@login_required
 def appointments_page():
     return render_template('appointments.html')
 
 @app.route('/optimize')
+@login_required
 def optimize_page():
     return render_template('optimize.html')
 
 @app.route('/analytics')
+@login_required
 def analytics_page():
     return render_template('analytics.html')
 
 @app.route('/history')
+@login_required
 def history_page():
     return render_template('history.html')
 
 @app.route('/beds')
+@login_required
 def beds_page():
     return render_template('beds.html')
 
 @app.route('/equipment')
+@login_required
 def equipment_page():
     return render_template('equipment.html')
 
 @app.route('/simulator')
+@login_required
 def simulator_page():
     return render_template('simulator.html')
 
 @app.route('/queue-display')
+@login_required
 def queue_display_page():
     return render_template('queue_display.html')
 
@@ -187,6 +285,7 @@ def queue_display_page():
 # ─── API: Authentication ──────────────────────────────────────────────────────
 
 @app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("5 per minute")
 def api_login():
     data = request.get_json() or {}
     username = data.get('username', '').strip()
@@ -206,6 +305,7 @@ def api_login():
 
 
 @app.route('/api/auth/logout', methods=['POST'])
+@login_required
 def api_logout():
     username = session.get('username')
     user_id = session.get('user_id')
@@ -257,6 +357,8 @@ def api_change_password():
 # ─── API: Dashboard ───────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard')
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_dashboard():
     today = date.today().isoformat()
     total_patients = Patient.query.count()
@@ -321,6 +423,8 @@ def api_dashboard():
 # ─── API: Patients ────────────────────────────────────────────────────────────
 
 @app.route('/api/patients', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_patients():
     search = request.args.get('search', '').strip().lower()
     priority = request.args.get('priority', '')
@@ -333,6 +437,8 @@ def api_patients():
 
 
 @app.route('/api/patients', methods=['POST'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_add_patient():
     data = request.get_json() or {}
     if not data.get('name'):
@@ -362,6 +468,8 @@ def api_add_patient():
 
 
 @app.route('/api/patients/<int:pid>', methods=['PUT'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_update_patient(pid):
     patient = db.get_or_404(Patient, pid)
     data = request.get_json() or {}
@@ -379,6 +487,8 @@ def api_update_patient(pid):
 
 
 @app.route('/api/patients/<int:pid>', methods=['DELETE'])
+@login_required
+@role_required(['admin'])
 def api_delete_patient(pid):
     patient = db.get_or_404(Patient, pid)
     name = patient.name
@@ -397,12 +507,16 @@ def api_delete_patient(pid):
 # ─── API: Doctors ─────────────────────────────────────────────────────────────
 
 @app.route('/api/doctors', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_doctors():
     doctors = Doctor.query.all()
     return jsonify([d.to_dict() for d in doctors])
 
 
 @app.route('/api/doctors', methods=['POST'])
+@login_required
+@role_required(['admin'])
 def api_add_doctor():
     data = request.get_json() or {}
     if not data.get('name'):
@@ -422,6 +536,8 @@ def api_add_doctor():
 
 
 @app.route('/api/doctors/<int:did>', methods=['PUT'])
+@login_required
+@role_required(['admin'])
 def api_update_doctor(did):
     doctor = db.get_or_404(Doctor, did)
     data = request.get_json() or {}
@@ -435,6 +551,8 @@ def api_update_doctor(did):
 
 
 @app.route('/api/doctors/<int:did>', methods=['DELETE'])
+@login_required
+@role_required(['admin'])
 def api_delete_doctor(did):
     doctor = db.get_or_404(Doctor, did)
     name = doctor.name
@@ -448,12 +566,16 @@ def api_delete_doctor(did):
 # ─── API: Rooms ───────────────────────────────────────────────────────────────
 
 @app.route('/api/rooms', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_rooms():
     rooms = Room.query.all()
     return jsonify([r.to_dict() for r in rooms])
 
 
 @app.route('/api/rooms', methods=['POST'])
+@login_required
+@role_required(['admin'])
 def api_add_room():
     data = request.get_json() or {}
     if not data.get('room_number'):
@@ -472,6 +594,8 @@ def api_add_room():
 
 
 @app.route('/api/rooms/<int:rid>', methods=['PUT'])
+@login_required
+@role_required(['admin'])
 def api_update_room(rid):
     room = db.get_or_404(Room, rid)
     data = request.get_json() or {}
@@ -484,6 +608,8 @@ def api_update_room(rid):
 
 
 @app.route('/api/rooms/<int:rid>', methods=['DELETE'])
+@login_required
+@role_required(['admin'])
 def api_delete_room(rid):
     room = db.get_or_404(Room, rid)
     number = room.room_number
@@ -498,12 +624,16 @@ def api_delete_room(rid):
 # ─── API: Departments ─────────────────────────────────────────────────────────
 
 @app.route('/api/departments', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_departments():
     depts = Department.query.all()
     return jsonify([d.to_dict() for d in depts])
 
 
 @app.route('/api/departments', methods=['POST'])
+@login_required
+@role_required(['admin'])
 def api_add_department():
     data = request.get_json() or {}
     dept = Department(
@@ -520,12 +650,16 @@ def api_add_department():
 # ─── API: Inpatient Beds ──────────────────────────────────────────────────────
 
 @app.route('/api/beds', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_beds():
     beds = Bed.query.all()
     return jsonify([b.to_dict() for b in beds])
 
 
 @app.route('/api/beds', methods=['POST'])
+@login_required
+@role_required(['admin'])
 def api_add_bed():
     data = request.get_json() or {}
     if not data.get('bed_number'):
@@ -544,6 +678,8 @@ def api_add_bed():
 
 
 @app.route('/api/beds/<int:bid>/status', methods=['PATCH'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_update_bed_status(bid):
     bed = db.get_or_404(Bed, bid)
     data = request.get_json() or {}
@@ -561,6 +697,8 @@ def api_update_bed_status(bid):
 
 
 @app.route('/api/beds/<int:bid>/admit', methods=['POST'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_admit_patient_to_bed(bid):
     bed = db.get_or_404(Bed, bid)
     data = request.get_json() or {}
@@ -579,6 +717,8 @@ def api_admit_patient_to_bed(bid):
 
 
 @app.route('/api/beds/<int:bid>/discharge', methods=['POST'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_discharge_patient_from_bed(bid):
     bed = db.get_or_404(Bed, bid)
     patient_name = bed.patient.name if bed.patient else 'Patient'
@@ -593,12 +733,16 @@ def api_discharge_patient_from_bed(bid):
 # ─── API: Medical Equipment ───────────────────────────────────────────────────
 
 @app.route('/api/equipment', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_equipment():
     equip = Equipment.query.all()
     return jsonify([e.to_dict() for e in equip])
 
 
 @app.route('/api/equipment', methods=['POST'])
+@login_required
+@role_required(['admin'])
 def api_add_equipment():
     data = request.get_json() or {}
     if not data.get('name'):
@@ -618,6 +762,8 @@ def api_add_equipment():
 
 
 @app.route('/api/equipment/<int:eid>/status', methods=['PATCH'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_update_equipment_status(eid):
     eq = db.get_or_404(Equipment, eid)
     data = request.get_json() or {}
@@ -633,6 +779,8 @@ def api_update_equipment_status(eid):
 # ─── API: Appointments ────────────────────────────────────────────────────────
 
 @app.route('/api/appointments', methods=['GET'])
+@login_required
+@role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_appointments():
     status = request.args.get('status', '')
     date_filter = request.args.get('date', '')
@@ -645,8 +793,15 @@ def api_appointments():
 
 
 @app.route('/api/appointments/<int:aid>/status', methods=['PATCH'])
+@login_required
+@role_required(['admin', 'manager', 'doctor'])
 def api_update_appointment_status(aid):
     appt = db.get_or_404(Appointment, aid)
+    current_user = get_current_user()
+    if session.get('role') == 'doctor':
+        if current_user and current_user.doctor_id and appt.doctor_id != current_user.doctor_id:
+            return jsonify({'error': 'Doctors can only update their own appointments'}), 403
+
     data = request.get_json() or {}
     new_status = data.get('status')
     if new_status not in ('scheduled', 'in_progress', 'completed', 'cancelled', 'no_show'):
@@ -664,6 +819,8 @@ def api_update_appointment_status(aid):
 # ─── API: Emergency Code Red Walk-In ──────────────────────────────────────────
 
 @app.route('/api/emergency/walkin', methods=['POST'])
+@login_required
+@role_required(['admin', 'manager', 'receptionist'])
 def api_emergency_walkin():
     data = request.get_json() or {}
     name = data.get('name', 'Anonymous Emergency Walk-In')
@@ -756,6 +913,8 @@ def api_emergency_walkin():
 # ─── API: Optimization ────────────────────────────────────────────────────────
 
 @app.route('/api/optimize', methods=['POST'])
+@login_required
+@role_required(['admin', 'manager'])
 def api_optimize():
     data = request.get_json() or {}
     algorithm = data.get('algorithm', 'hybrid')
@@ -852,6 +1011,8 @@ def api_optimize():
 # ─── API: Crisis Scenario Simulation ("What-If" Analysis) ─────────────────────
 
 @app.route('/api/simulation/run', methods=['POST'])
+@login_required
+@role_required(['admin', 'manager'])
 def api_run_simulation():
     data = request.get_json() or {}
     target_date = data.get('date', date.today().isoformat())
@@ -877,6 +1038,8 @@ def api_run_simulation():
 # ─── API: Analytics ───────────────────────────────────────────────────────────
 
 @app.route('/api/analytics/wait-time')
+@login_required
+@role_required(['admin', 'manager'])
 def api_analytics_wait_time():
     result = {}
     for priority in ['critical', 'urgent', 'normal', 'low']:
@@ -890,6 +1053,8 @@ def api_analytics_wait_time():
 
 
 @app.route('/api/analytics/utilization')
+@login_required
+@role_required(['admin', 'manager'])
 def api_analytics_utilization():
     doctors = Doctor.query.all()
     util_data = []
@@ -908,6 +1073,8 @@ def api_analytics_utilization():
 
 
 @app.route('/api/analytics/patients-status')
+@login_required
+@role_required(['admin', 'manager'])
 def api_analytics_patients_status():
     all_patients = Patient.query.all()
     assigned_ids = {a.patient_id for a in Appointment.query.filter_by(status='scheduled').all()}
@@ -917,12 +1084,16 @@ def api_analytics_patients_status():
 
 
 @app.route('/api/optimization-runs')
+@login_required
+@role_required(['admin', 'manager'])
 def api_optimization_runs():
     runs = OptimizationRun.query.order_by(OptimizationRun.created_at.desc()).all()
     return jsonify([r.to_dict() for r in runs])
 
 
 @app.route('/api/audit-logs')
+@login_required
+@role_required(['admin'])
 def api_audit_logs():
     logs = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(100).all()
     return jsonify([l.to_dict() for l in logs])
@@ -930,7 +1101,18 @@ def api_audit_logs():
 
 # ─── API: Export to CSV ───────────────────────────────────────────────────────
 
+def sanitize_csv_cell(val):
+    if val is None:
+        return ""
+    s = str(val)
+    if s and s[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + s
+    return s
+
+
 @app.route('/api/export/appointments/csv')
+@login_required
+@role_required(['admin', 'manager'])
 def export_appointments_csv():
     target_date = request.args.get('date', date.today().isoformat())
     appts = Appointment.query.filter_by(date=target_date).order_by(Appointment.start_time).all()
@@ -944,7 +1126,7 @@ def export_appointments_csv():
     ])
 
     for a in appts:
-        writer.writerow([
+        row = [
             a.id, a.date, a.start_time, a.end_time, a.duration_minutes,
             a.patient.name if a.patient else '',
             a.patient.priority if a.patient else '',
@@ -954,7 +1136,8 @@ def export_appointments_csv():
             a.room.room_number if a.room else '',
             'YES' if a.is_emergency else 'NO',
             a.status, a.waiting_time
-        ])
+        ]
+        writer.writerow([sanitize_csv_cell(c) for c in row])
 
     output.seek(0)
     return Response(
@@ -970,6 +1153,5 @@ if __name__ == '__main__':
     print("=" * 65)
     print("  Smart Hospital Resource Optimization System (Enterprise Pro)")
     print("  Running at: http://127.0.0.1:5000")
-    print("  Default Admin Login: admin / admin123")
     print("=" * 65)
     app.run(debug=True, port=5000)

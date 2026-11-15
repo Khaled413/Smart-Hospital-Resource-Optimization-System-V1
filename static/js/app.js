@@ -54,20 +54,42 @@ const Spinner = {
   }
 };
 
+// ── CSRF Token Helper ─────────────────────────────────────────
+function getCsrfToken() {
+  const match = document.cookie.match(/csrf_token=([^;]+)/);
+  if (match) return decodeURIComponent(match[1]);
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  return meta ? meta.getAttribute('content') : '';
+}
+
 // ── API Helper ────────────────────────────────────────────────
 const API = {
+  getHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    const csrf = getCsrfToken();
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+    return headers;
+  },
   async get(url) {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
+    if (!res.ok) {
+      if (res.status === 401 && !url.includes('/api/auth/me')) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+      }
+      throw new Error(`GET ${url} failed: ${res.status}`);
+    }
     return res.json();
   },
   async post(url, data) {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(data)
     });
     if (!res.ok) {
+      if (res.status === 401 && !url.includes('/api/auth/login')) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+      }
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || err.message || `POST ${url} failed: ${res.status}`);
     }
@@ -76,27 +98,45 @@ const API = {
   async put(url, data) {
     const res = await fetch(url, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(data)
     });
     if (!res.ok) {
+      if (res.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+      }
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `PUT ${url} failed: ${res.status}`);
     }
     return res.json();
   },
   async delete(url) {
-    const res = await fetch(url, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`DELETE ${url} failed: ${res.status}`);
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: this.getHeaders()
+    });
+    if (!res.ok) {
+      if (res.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `DELETE ${url} failed: ${res.status}`);
+    }
     return res.json();
   },
   async patch(url, data) {
     const res = await fetch(url, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(data)
     });
-    if (!res.ok) throw new Error(`PATCH ${url} failed: ${res.status}`);
+    if (!res.ok) {
+      if (res.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `PATCH ${url} failed: ${res.status}`);
+    }
     return res.json();
   }
 };

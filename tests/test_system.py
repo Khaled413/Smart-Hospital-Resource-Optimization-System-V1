@@ -21,8 +21,13 @@ from optimizer import (
 @pytest.fixture
 def client():
     app.config['TESTING'] = True
+    os.environ['ADMIN_INITIAL_PASSWORD'] = 'admin123'
     with app.test_client() as test_client:
         yield test_client
+
+
+def login_as(client, username='admin', password='admin123'):
+    return client.post('/api/auth/login', json={'username': username, 'password': password})
 
 
 def test_user_authentication(client):
@@ -36,6 +41,53 @@ def test_user_authentication(client):
     # Failed login
     res_fail = client.post('/api/auth/login', json={'username': 'admin', 'password': 'wrongpassword'})
     assert res_fail.status_code == 401
+
+
+def test_rbac_and_protected_routes(client):
+    """Test that unauthorized access is blocked and roles are strictly enforced."""
+    # 1. Unauthenticated page redirect
+    res_page = client.get('/')
+    assert res_page.status_code == 302
+    assert '/login' in res_page.headers['Location']
+
+    # 2. Unauthenticated API returns 401
+    res_api = client.get('/api/dashboard')
+    assert res_api.status_code == 401
+
+    # 3. Login as receptionist
+    login_as(client, 'receptionist', 'Reception#2025!')
+
+    # Receptionist can view beds
+    res_beds = client.get('/api/beds')
+    assert res_beds.status_code == 200
+
+    # Receptionist cannot access audit logs (Admin only)
+    res_audit = client.get('/api/audit-logs')
+    assert res_audit.status_code == 403
+
+    # Receptionist cannot trigger AI optimization (Admin & Manager only)
+    res_opt = client.post('/api/optimize', json={})
+    assert res_opt.status_code == 403
+
+    # 4. Login as admin
+    login_as(client, 'admin', 'admin123')
+    res_audit_admin = client.get('/api/audit-logs')
+    assert res_audit_admin.status_code == 200
+
+
+def test_security_headers_and_csv_sanitization(client):
+    """Test security headers and CSV export sanitization."""
+    res = client.get('/login')
+    assert res.headers.get('X-Content-Type-Options') == 'nosniff'
+    assert res.headers.get('X-Frame-Options') == 'SAMEORIGIN'
+    assert 'Content-Security-Policy' in res.headers
+
+    from app import sanitize_csv_cell
+    assert sanitize_csv_cell("=1+1") == "'=1+1"
+    assert sanitize_csv_cell("+cmd") == "'+cmd"
+    assert sanitize_csv_cell("-123") == "'-123"
+    assert sanitize_csv_cell("@calc") == "'@calc"
+    assert sanitize_csv_cell("Normal text") == "Normal text"
 
 
 def test_no_show_prediction():
@@ -100,6 +152,7 @@ def test_emergency_code_red_preemption(client):
 
 def test_bed_management_api(client):
     """Test bed admission and discharge flow."""
+    login_as(client, 'admin', 'admin123')
     # List beds
     res = client.get('/api/beds')
     assert res.status_code == 200
