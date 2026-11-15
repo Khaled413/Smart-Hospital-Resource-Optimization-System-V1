@@ -8,7 +8,13 @@ Features:
 - "What-If" Crisis Scenario Simulation
 """
 
-import pulp
+try:
+    import pulp
+    PULP_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    pulp = None
+    PULP_AVAILABLE = False
+
 from datetime import datetime, timedelta
 import random
 import math
@@ -213,6 +219,11 @@ def run_lp(patients, doctors, rooms, target_date):
     """
     log = ["[LP] Starting Mixed-Integer Linear Programming Optimization..."]
 
+    # Check if PuLP is available
+    if not PULP_AVAILABLE or pulp is None:
+        log.append("[LP Fallback] PuLP solver library is not available in runtime environment. Executing Dynamic Greedy.")
+        return run_greedy(patients, doctors, rooms, target_date)
+
     # If problem size is very large (> 60 patients), fallback to Greedy for sub-second responsiveness
     if len(patients) > 75:
         log.append("[LP] Dataset is large (>75 patients). Using fast Greedy to guarantee instant response.")
@@ -362,6 +373,10 @@ def run_hybrid(patients, doctors, rooms, target_date):
     2. Uses Greedy for normal and low-priority patients in remaining free slots.
     """
     log = ["[HYBRID] Starting Hybrid Scheduling (LP for Critical/Urgent + Greedy for Normal/Low)..."]
+
+    if not PULP_AVAILABLE or pulp is None:
+        log.append("[HYBRID Fallback] PuLP solver library not available. Executing full Dynamic Greedy.")
+        return run_greedy(patients, doctors, rooms, target_date)
 
     high_priority = [p for p in patients if p.priority in ('critical', 'urgent')]
     low_priority = [p for p in patients if p.priority in ('normal', 'low')]
