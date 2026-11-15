@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 480" width="100%" height="100%">
+  <defs>
+    <linearGradient id="rbacBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a1226"/>
+      <stop offset="100%" stop-color="#0e172e"/>
+    </linearGradient>
+    <linearGradient id="cardBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#14213d"/>
+      <stop offset="100%" stop-color="#0f1930"/>
+    </linearGradient>
+    <linearGradient id="accentBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1000" height="480" rx="16" fill="url(#rbacBg)"/>
+  <rect x="1" y="1" width="998" height="478" rx="15" fill="none" stroke="#1e293b" stroke-width="1.5"/>
+
+  <!-- Title -->
+  <text x="40" y="46" font-family="'Segoe UI', Inter, sans-serif" font-size="20" font-weight="800" fill="#ffffff">DYNAMIC DATABASE-DRIVEN RBAC ENGINE</text>
+  <text x="40" y="68" font-family="Inter, sans-serif" font-size="12" fill="#94a3b8">Default-Deny Architecture • 36-Permission Authoritative Catalog • Row &amp; Field Data Scoping</text>
+
+  <!-- Block 1: Permission Catalog -->
+  <g transform="translate(40, 95)">
+    <rect width="210" height="340" rx="12" fill="url(#cardBg)" stroke="#1e3a5f" stroke-width="1.2"/>
+    <rect x="16" y="18" width="178" height="28" rx="6" fill="#0284c7" opacity="0.2"/>
+    <text x="105" y="36" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#38bdf8" text-anchor="middle">1. CATALOG (DB)</text>
+    <text x="20" y="70" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#f8fafc">Authoritative Keys:</text>
+    
+    <g transform="translate(20, 85)" font-family="'Courier New', monospace" font-size="10" fill="#cbd5e1">
+      <text y="0">dashboard.view</text>
+      <text y="20">patients.view_clinical</text>
+      <text y="40">appointments.view_all</text>
+      <text y="60">appointments.update</text>
+      <text y="80">beds.admit_discharge</text>
+      <text y="100">emergency.trigger</text>
+      <text y="120">optimization.run</text>
+      <text y="140">simulation.run</text>
+      <text y="160">roles.manage</text>
+      <text y="180">users.manage</text>
+      <text y="200">audit.view</text>
+      <text y="225" font-family="Inter, sans-serif" fill="#64748b" font-style="italic">+ 25 more keys...</text>
+    </g>
+  </g>
+
+  <!-- Arrow 1 to 2 -->
+  <g stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,4">
+    <line x1="250" y1="265" x2="275" y2="265"/>
+    <polygon points="280,265 272,260 272,270" fill="#38bdf8"/>
+  </g>
+
+  <!-- Block 2: Roles Mapping -->
+  <g transform="translate(285, 95)">
+    <rect width="205" height="340" rx="12" fill="url(#cardBg)" stroke="#134e4a" stroke-width="1.2"/>
+    <rect x="16" y="18" width="173" height="28" rx="6" fill="#0d9488" opacity="0.2"/>
+    <text x="102" y="36" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#14b8a6" text-anchor="middle">2. ROLES (EDITABLE)</text>
+    
+    <g transform="translate(18, 65)">
+      <!-- Role 1 -->
+      <rect width="169" height="52" rx="6" fill="#0b1329" stroke="#0284c7" stroke-width="1"/>
+      <text x="10" y="20" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#fff">👑 Admin</text>
+      <text x="10" y="38" font-family="Inter, sans-serif" font-size="9" fill="#94a3b8">Locked System Role (100% Perms)</text>
+
+      <!-- Role 2 -->
+      <rect y="60" width="169" height="52" rx="6" fill="#0b1329" stroke="#0d9488" stroke-width="1"/>
+      <text x="10" y="80" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#fff">🏢 Manager</text>
+      <text x="10" y="98" font-family="Inter, sans-serif" font-size="9" fill="#94a3b8">Beds, Sim, Optimizer, Export</text>
+
+      <!-- Role 3 -->
+      <rect y="120" width="169" height="52" rx="6" fill="#0b1329" stroke="#6366f1" stroke-width="1"/>
+      <text x="10" y="140" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#fff">👨‍⚕️ Doctor</text>
+      <text x="10" y="158" font-family="Inter, sans-serif" font-size="9" fill="#94a3b8">Row-Scoped: Own Schedule</text>
+
+      <!-- Role 4 -->
+      <rect y="180" width="169" height="52" rx="6" fill="#0b1329" stroke="#d97706" stroke-width="1"/>
+      <text x="10" y="200" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#fff">📋 Receptionist</text>
+      <text x="10" y="218" font-family="Inter, sans-serif" font-size="9" fill="#94a3b8">Intake, Walk-in, Bed Display</text>
+
+      <!-- Role 5 -->
+      <rect y="240" width="169" height="24" rx="6" fill="#0b1329" stroke="#475569" stroke-width="1"/>
+      <text x="84" y="256" font-family="Inter, sans-serif" font-size="10" font-weight="700" fill="#cbd5e1" text-anchor="middle">+ Custom Roles (/roles)</text>
+    </g>
+  </g>
+
+  <!-- Arrow 2 to 3 -->
+  <g stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,4">
+    <line x1="490" y1="265" x2="515" y2="265"/>
+    <polygon points="520,265 512,260 512,270" fill="#38bdf8"/>
+  </g>
+
+  <!-- Block 3: User Overrides -->
+  <g transform="translate(525, 95)">
+    <rect width="210" height="340" rx="12" fill="url(#cardBg)" stroke="#78350f" stroke-width="1.2"/>
+    <rect x="16" y="18" width="178" height="28" rx="6" fill="#d97706" opacity="0.2"/>
+    <text x="105" y="36" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#f59e0b" text-anchor="middle">3. USER OVERRIDES</text>
+    
+    <g transform="translate(18, 65)">
+      <rect width="174" height="110" rx="8" fill="#0b1329" stroke="#d97706" stroke-width="1"/>
+      <text x="12" y="24" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#f8fafc">Effective Equation:</text>
+      <text x="12" y="48" font-family="'Courier New', monospace" font-size="10" fill="#38bdf8">(Role Permissions</text>
+      <text x="12" y="66" font-family="'Courier New', monospace" font-size="10" fill="#10b981"> ∪ User GRANTS)</text>
+      <text x="12" y="84" font-family="'Courier New', monospace" font-size="10" fill="#ef4444"> − User DENIES</text>
+      <text x="12" y="100" font-family="Inter, sans-serif" font-size="9.5" fill="#fca5a5" font-weight="700">★ Deny Always Wins!</text>
+
+      <rect y="125" width="174" height="135" rx="8" fill="#0b1329" stroke="#1e293b" stroke-width="1"/>
+      <text x="12" y="145" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#f8fafc">Instant Invalidation:</text>
+      <text x="12" y="166" font-family="Inter, sans-serif" font-size="10" fill="#94a3b8">• users.permissions_version</text>
+      <text x="12" y="184" font-family="Inter, sans-serif" font-size="10" fill="#94a3b8">• roles.version bump</text>
+      <text x="12" y="202" font-family="Inter, sans-serif" font-size="10" fill="#94a3b8">• Immediate session sync</text>
+      <text x="12" y="222" font-family="Inter, sans-serif" font-size="10" font-weight="700" fill="#10b981">✓ Zero logout required</text>
+    </g>
+  </g>
+
+  <!-- Arrow 3 to 4 -->
+  <g stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,4">
+    <line x1="735" y1="265" x2="760" y2="265"/>
+    <polygon points="765,265 757,260 757,270" fill="#38bdf8"/>
+  </g>
+
+  <!-- Block 4: Multi-Layer Enforcement -->
+  <g transform="translate(770, 95)">
+    <rect width="190" height="340" rx="12" fill="url(#cardBg)" stroke="#7f1d1d" stroke-width="1.2"/>
+    <rect x="16" y="18" width="158" height="28" rx="6" fill="#dc2626" opacity="0.2"/>
+    <text x="95" y="36" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#f87171" text-anchor="middle">4. ENFORCEMENT</text>
+    
+    <g transform="translate(16, 65)">
+      <!-- Level A -->
+      <rect width="158" height="75" rx="8" fill="#0b1329" stroke="#0284c7" stroke-width="1"/>
+      <text x="10" y="22" font-family="Inter, sans-serif" font-size="10.5" font-weight="800" fill="#38bdf8">API &amp; UI Gating</text>
+      <text x="10" y="40" font-family="'Courier New', monospace" font-size="9" fill="#cbd5e1">@require_permission</text>
+      <text x="10" y="56" font-family="'Courier New', monospace" font-size="9" fill="#cbd5e1">Jinja can('...')</text>
+      <text x="10" y="70" font-family="Inter, sans-serif" font-size="8.5" fill="#94a3b8">Default-Deny 401/403</text>
+
+      <!-- Level B -->
+      <rect y="88" width="158" height="75" rx="8" fill="#0b1329" stroke="#6366f1" stroke-width="1"/>
+      <text x="10" y="110" font-family="Inter, sans-serif" font-size="10.5" font-weight="800" fill="#a5b4fc">Row-Level Doctor Scoping</text>
+      <text x="10" y="128" font-family="Inter, sans-serif" font-size="9" fill="#cbd5e1">Physicians query ONLY</text>
+      <text x="10" y="142" font-family="Inter, sans-serif" font-size="9" fill="#cbd5e1">their own patients.</text>
+      <text x="10" y="156" font-family="Inter, sans-serif" font-size="8.5" fill="#10b981">✓ Tamper-proof query filter</text>
+
+      <!-- Level C -->
+      <rect y="176" width="158" height="75" rx="8" fill="#0b1329" stroke="#0d9488" stroke-width="1"/>
+      <text x="10" y="198" font-family="Inter, sans-serif" font-size="10.5" font-weight="800" fill="#2dd4bf">Field-Level PII Masking</text>
+      <text x="10" y="216" font-family="Inter, sans-serif" font-size="9" fill="#cbd5e1">Vitals stripped for non-MD.</text>
+      <text x="10" y="230" font-family="Inter, sans-serif" font-size="9" fill="#cbd5e1">Anonymized under demo mode.</text>
+      <text x="10" y="244" font-family="Inter, sans-serif" font-size="8.5" fill="#14b8a6">✓ HIPAA / GDPR Safeguard</text>
+    </g>
+  </g>
+</svg>
