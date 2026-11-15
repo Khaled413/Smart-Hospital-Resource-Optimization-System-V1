@@ -32,7 +32,13 @@ from seed_data import seed_database
 
 # ─── App Factory / Configuration ──────────────────────────────────────────────
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static'),
+    static_url_path='/static'
+)
 env_name = os.environ.get('FLASK_ENV', 'dev')
 app.config.from_object(get_config(env_name))
 

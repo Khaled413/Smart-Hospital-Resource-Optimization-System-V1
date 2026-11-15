@@ -209,16 +209,33 @@ vercel
 
 ---
 
-## 🔑 User Accounts & Access Control
+## 🔑 User Accounts & Access Control (RBAC)
 
-Navigate to **`http://127.0.0.1:5000/login`**:
+The system enforces strict Role-Based Access Control across all views and API endpoints with session-based authentication, CSRF tokens, and login rate limiting (5 attempts/min).
 
-| Role | Username | Password Source | Operational Access |
+Navigate to **`http://127.0.0.1:5000/login`** (or use the one-click quick autofill buttons):
+
+| Role | Username | Default Password | Operational Access Matrix |
 | :--- | :--- | :--- | :--- |
-| **👑 Super Admin** | `admin` | Set via `ADMIN_INITIAL_PASSWORD` or generated on seed | Full administrative control, user management, audit trails |
-| **👨‍⚕️ Physician** | `dr_sarah` | Set via `DOCTOR_INITIAL_PASSWORD` | Clinic consultation roster, diagnosis notes & prescriptions |
-| **🏢 Operations Director** | `manager` | Set via `MANAGER_INITIAL_PASSWORD` | Bed matrix, device fleets, crisis stress-test simulator |
-| **📋 Receptionist** | `receptionist` | Set via `RECEPTIONIST_INITIAL_PASSWORD` | Outpatient directory, Code Red emergency walk-in intake |
+| **👑 Super Admin** | `admin` | `Admin#2025!` | Full platform administration, RBAC assignment, audit logs, resource deletion |
+| **🏢 Operations Director** | `manager` | `Manager#2025!` | Bed admissions, medical fleets, optimization engine, crisis simulator, CSV export |
+| **👨‍⚕️ Physician** | `dr_sarah` | `Doctor#2025!` | View department schedule, update **own** appointments' status, clinical notes & prescriptions |
+| **📋 Receptionist** | `receptionist` | `Reception#2025!` | Outpatient registration, appointments directory, Code Red emergency walk-in intake, bed occupancy |
+
+> [!NOTE]
+> All credentials can be customized via `.env` (`ADMIN_INITIAL_PASSWORD`, `DOCTOR_INITIAL_PASSWORD`, etc.).
+
+---
+
+## 🛡️ Security & Enterprise Hardening
+
+* **Authentication & RBAC**: Every `/api/*` endpoint is guarded by `login_required` and role-specific `role_required` decorators. Doctors cannot tamper with other doctors' appointments.
+* **Rate Limiting**: `Flask-Limiter` protects authentication against brute-force attacks (`5 requests/minute`).
+* **CSRF Defense**: Double-submit cookie & header token pattern (`X-CSRF-Token`) verified on state-changing methods (`POST`, `PUT`, `PATCH`, `DELETE`).
+* **Spreadsheet Formula Injection Protection**: Exported CSV cells starting with `=, +, -, @, \t, \r` are automatically escaped.
+* **Cookie & Header Hardening**: `HttpOnly`, `SameSite=Lax`, CSP, `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`.
+* **State Machine Validation**: Appointment statuses follow clinical lifecycle validation (`scheduled` -> `in_progress` -> `completed` / `cancelled`); terminal states cannot be illegally reversed.
+* **Deletion Safeguards**: Resources with active scheduled appointments cannot be silently deleted, preventing accidental medical record data loss.
 
 ---
 

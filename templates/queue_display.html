@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Clinic Waiting Hall Monitor — MediOptim Pro</title>
-  <link rel="icon" type="image/png" href="/static/img/logo.png">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>
     body {
       background: #f1f5f9;
@@ -129,7 +129,7 @@
 
 <div class="display-header">
   <div class="hospital-title">
-    <img src="/static/img/logo.png" alt="MediOptim Pro Hospital Logo">
+    <img src="{{ url_for('static', filename='img/logo.png') }}" alt="MediOptim Pro Hospital Logo">
     <div>
       <h1>MediOptim Pro — Smart Hospital Clinic Queue</h1>
       <div style="font-size:13px;color:#64748b;font-weight:500">Real-Time Patient Calling & Dynamic Clinic Allocation Board</div>

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Login — MediOptim Pro Hospital Management</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
-  <link rel="icon" type="image/png" href="/static/img/logo.png">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>
     body {
       display: flex;
@@ -68,7 +68,7 @@
 <div class="login-container">
   <div class="login-box">
     <div style="text-align:center;margin-bottom:24px">
-      <img src="/static/img/logo.png" alt="MediOptim Pro Logo" style="width:80px;height:80px;object-fit:contain;margin-bottom:12px;filter:drop-shadow(0 4px 8px rgba(2,132,199,0.15));">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="MediOptim Pro Logo" style="width:80px;height:80px;object-fit:contain;margin-bottom:12px;filter:drop-shadow(0 4px 8px rgba(2,132,199,0.15));">
       <h2 style="margin:0;font-size:24px;font-weight:800;color:#0f172a;letter-spacing:-0.5px">MediOptim Pro</h2>
       <div style="font-size:13px;color:#64748b;margin-top:4px;font-weight:500">Smart Hospital Resource Optimization System</div>
     </div>
@@ -103,7 +103,7 @@
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<script src="/static/js/app.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
 function fillUser(u) {
   document.getElementById('login-username').value = u;
