@@ -360,6 +360,19 @@ class Equipment(db.Model):
         }
 
 
+def mask_patient_name(name: str) -> str:
+    """Mask patient name for privacy in demo or public displays (e.g. Alice Johnson -> A*** J.)"""
+    if not name:
+        return ""
+    parts = name.strip().split()
+    if len(parts) == 1:
+        w = parts[0]
+        return (w[0] + "***") if len(w) > 1 else w
+    first = parts[0][0] + "***"
+    last = parts[-1][0] + "."
+    return f"{first} {last}"
+
+
 # ─── Patient Model ────────────────────────────────────────────────────────────
 
 class Patient(db.Model):
@@ -396,28 +409,46 @@ class Patient(db.Model):
         scores = {'critical': 4, 'urgent': 3, 'normal': 2, 'low': 1}
         return scores.get(self.priority, 2)
 
-    def to_dict(self, latest_status=None):
+    def to_dict(self, latest_status=None, viewer=None):
         if latest_status is None:
             if self.appointments:
                 latest_status = sorted(self.appointments, key=lambda a: a.created_at, reverse=True)[0].status
             else:
                 latest_status = 'unscheduled'
+
+        display_name = self.name
+        is_demo = False
+        can_view_clinical = True
+
+        if viewer:
+            if hasattr(viewer, 'has_permission'):
+                can_view_clinical = viewer.has_permission('patients.view_clinical')
+                if getattr(viewer, 'get_role_name', lambda: '')() == 'demo_viewer':
+                    is_demo = True
+            elif isinstance(viewer, dict):
+                can_view_clinical = 'patients.view_clinical' in viewer.get('permissions', [])
+                if viewer.get('role') == 'demo_viewer':
+                    is_demo = True
+
+        if is_demo:
+            display_name = mask_patient_name(self.name)
+
         return {
             'id': self.id,
-            'name': self.name,
+            'name': display_name,
             'age': self.age,
             'gender': self.gender,
             'priority': self.priority,
-            'triage_level': self.triage_level,
+            'triage_level': self.triage_level if can_view_clinical else None,
             'required_specialization': self.required_specialization,
-            'condition_description': self.condition_description,
+            'condition_description': self.condition_description if can_view_clinical else '[Protected Clinical Details]',
             'preferred_date': self.preferred_date,
             'vitals': {
                 'bp': self.blood_pressure or '120/80',
                 'hr': self.heart_rate or 75,
                 'spo2': self.spo2 or 98,
                 'temp': self.temperature or 37.0
-            },
+            } if can_view_clinical else None,
             'no_show_risk': round(self.no_show_risk or 0.1, 2),
             'registered_at': self.registered_at.isoformat() if self.registered_at else '',
             'appointment_status': latest_status
@@ -451,13 +482,30 @@ class Appointment(db.Model):
 
     equipment = db.relationship('Equipment', backref='appointments', lazy=True)
 
-    def to_dict(self):
+    def to_dict(self, viewer=None):
+        display_patient_name = self.patient.name if self.patient else 'Unknown'
+        can_view_clinical = True
+        is_demo = False
+
+        if viewer:
+            if hasattr(viewer, 'has_permission'):
+                can_view_clinical = viewer.has_permission('patients.view_clinical')
+                if getattr(viewer, 'get_role_name', lambda: '')() == 'demo_viewer':
+                    is_demo = True
+            elif isinstance(viewer, dict):
+                can_view_clinical = 'patients.view_clinical' in viewer.get('permissions', [])
+                if viewer.get('role') == 'demo_viewer':
+                    is_demo = True
+
+        if is_demo and self.patient:
+            display_patient_name = mask_patient_name(self.patient.name)
+
         return {
             'id': self.id,
             'patient_id': self.patient_id,
-            'patient_name': self.patient.name if self.patient else 'Unknown',
+            'patient_name': display_patient_name,
             'patient_priority': self.patient.priority if self.patient else 'normal',
-            'patient_triage': self.patient.triage_level if self.patient else 3,
+            'patient_triage': (self.patient.triage_level if self.patient else 3) if can_view_clinical else None,
             'doctor_id': self.doctor_id,
             'doctor_name': self.doctor.name if self.doctor else 'Unknown',
             'doctor_specialization': self.doctor.specialization if self.doctor else '',
@@ -473,8 +521,8 @@ class Appointment(db.Model):
             'status': self.status,
             'is_emergency': bool(self.is_emergency),
             'notes': self.notes,
-            'clinical_notes': self.clinical_notes,
-            'prescription': self.prescription,
+            'clinical_notes': self.clinical_notes if can_view_clinical else '[Protected Clinical Notes]',
+            'prescription': self.prescription if can_view_clinical else '[Protected Prescription]',
             'created_at': self.created_at.isoformat() if self.created_at else ''
         }
 
