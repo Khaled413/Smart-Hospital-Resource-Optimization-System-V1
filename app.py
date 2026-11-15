@@ -5,7 +5,7 @@ Crisis Simulation, Export, and Optimization Services.
 """
 
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response, send_from_directory
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import csv
 import io
 import os
@@ -309,18 +309,59 @@ def simulator_page():
 def queue_display_page():
     return render_template('queue_display.html')
 
+@app.route('/change-password')
+@login_required
+def change_password_page():
+    return render_template('change_password.html')
+
 
 # ─── API: Authentication ──────────────────────────────────────────────────────
 
+def login_limit_key():
+    data = request.get_json(silent=True) or {}
+    u = str(data.get('username', '')).strip().lower()
+    ip = get_remote_address()
+    return f"{ip}:{u}"
+
+
 @app.route('/api/auth/login', methods=['POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=login_limit_key)
 def api_login():
     data = request.get_json() or {}
     username = data.get('username', '').strip()
     password = data.get('password', '')
 
     user = User.query.filter((User.username == username) | (User.email == username)).first()
-    if not user or not user.check_password(password):
+    if user:
+        # Check if account is temporarily locked
+        if user.locked_until and user.locked_until > datetime.utcnow():
+            mins_left = max(1, int((user.locked_until - datetime.utcnow()).total_seconds() / 60))
+            return jsonify({
+                'error': f'Account is temporarily locked due to multiple failed login attempts. Try again in {mins_left} minute(s).'
+            }), 403
+
+        if not getattr(user, 'is_active', True):
+            return jsonify({'error': 'Account has been disabled. Contact system administrator.'}), 403
+
+        if not user.check_password(password):
+            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+            if user.failed_login_attempts >= 5:
+                user.locked_until = datetime.utcnow() + timedelta(minutes=15)
+                db.session.commit()
+                log_audit('LOCKOUT', 'user', user.id, f"User {user.username} locked out after 5 consecutive failed login attempts")
+                return jsonify({
+                    'error': 'Account has been temporarily locked for 15 minutes due to 5 consecutive failed login attempts.'
+                }), 403
+            db.session.commit()
+            log_audit('LOGIN_FAILED', 'user', user.id, f"Failed login attempt ({user.failed_login_attempts}/5) for {user.username}")
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+        # Successful login: reset failed attempts
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.session.commit()
+    else:
+        log_audit('LOGIN_FAILED', 'user', None, f"Failed login attempt for non-existent user: {username}")
         return jsonify({'error': 'Invalid username or password'}), 401
 
     session['user_id'] = user.id

@@ -58,16 +58,30 @@ def seed_database():
 
     # ── 3. Users (RBAC) ───────────────────────────────────────────────────────
     import os
+    import secrets
 
-    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD', 'Admin#2025!')
+    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD')
     admin_must_change = False
+    if not admin_initial_password:
+        admin_initial_password = secrets.token_urlsafe(16)
+        admin_must_change = True
+        print("\n" + "=" * 65)
+        print("  [SECURITY NOTICE] Generated Random Initial Admin Password:")
+        print(f"  Username: admin")
+        print(f"  Password: {admin_initial_password}")
+        print("  Note: Change this password immediately upon first login.")
+        print("=" * 65 + "\n")
+
+    manager_password = os.environ.get('MANAGER_INITIAL_PASSWORD') or secrets.token_urlsafe(14)
+    receptionist_password = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or secrets.token_urlsafe(14)
+    doctor_password = os.environ.get('DOCTOR_INITIAL_PASSWORD') or secrets.token_urlsafe(14)
 
     users_data = [
         {
             "username": "admin",
             "email": "admin@hospital.org",
             "role": "admin",
-            "name": "Dr. Chief Administrator",
+            "name": "Chief Administrator",
             "pass": admin_initial_password,
             "must_change": admin_must_change
         },
@@ -76,7 +90,7 @@ def seed_database():
             "email": "manager@hospital.org",
             "role": "manager",
             "name": "Operations Director",
-            "pass": os.environ.get('MANAGER_INITIAL_PASSWORD', 'Manager#2025!'),
+            "pass": manager_password,
             "must_change": False
         },
         {
@@ -84,7 +98,7 @@ def seed_database():
             "email": "frontdesk@hospital.org",
             "role": "receptionist",
             "name": "Front Desk Reception",
-            "pass": os.environ.get('RECEPTIONIST_INITIAL_PASSWORD', 'Reception#2025!'),
+            "pass": receptionist_password,
             "must_change": False
         },
         {
@@ -92,11 +106,22 @@ def seed_database():
             "email": "s.mitchell@hospital.org",
             "role": "doctor",
             "name": "Dr. Sarah Mitchell",
-            "pass": os.environ.get('DOCTOR_INITIAL_PASSWORD', 'Doctor#2025!'),
+            "pass": doctor_password,
             "doc_id": docs[0].id,
             "must_change": False
         },
     ]
+
+    # Add read-only demo_viewer if DEMO_MODE is active
+    if os.environ.get('DEMO_MODE', 'false').lower() in ('true', '1', 'yes'):
+        users_data.append({
+            "username": "demo_viewer",
+            "email": "demo@hospital.org",
+            "role": "demo_viewer",
+            "name": "Public Demo Guest (Read-Only)",
+            "pass": os.environ.get('DEMO_PASSWORD', 'DemoViewer#2025!'),
+            "must_change": False
+        })
     for u in users_data:
         user = User(
             username=u["username"],

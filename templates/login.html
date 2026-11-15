@@ -73,17 +73,16 @@
       <div style="font-size:13px;color:#64748b;margin-top:4px;font-weight:500">Smart Hospital Resource Optimization System</div>
     </div>
 
-    <!-- Quick Demo Logins -->
-    <div style="margin-bottom:24px;background:#f8fafc;padding:14px;border-radius:12px;border:1px dashed #cbd5e1">
-      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:10px;text-align:center;text-transform:uppercase;letter-spacing:0.5px">⚡ Quick Select Role:</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <button type="button" class="demo-role-btn" onclick="fillCreds('admin', 'Admin#2025!')">👑 Admin</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('dr_sarah', 'Doctor#2025!')">👨‍⚕️ Dr. Sarah</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('manager', 'Manager#2025!')">🏢 Operations</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('receptionist', 'Reception#2025!')">📋 Reception</button>
-      </div>
-      <div style="font-size:10.5px;color:#64748b;margin-top:8px;text-align:center">Click any role to autofill login credentials instantly.</div>
+    {% if config.DEMO_MODE %}
+    <!-- Public Read-Only Demo Access (Available only when DEMO_MODE=true) -->
+    <div style="margin-bottom:20px;background:#f0fdf4;padding:12px;border-radius:10px;border:1px dashed #86efac;text-align:center">
+      <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">🌿 Demonstration Mode Active</div>
+      <button type="button" class="btn btn-sm" onclick="fillDemo()" style="font-size:12px;width:100%;justify-content:center;background:#15803d;color:#fff;border:none">
+        👁️ Autofill Read-Only Demo Guest
+      </button>
+      <div style="font-size:10px;color:#15803d;margin-top:6px">Accesses synthetic hospital data with read-only permissions. Write & admin actions disabled.</div>
     </div>
+    {% endif %}
 
     <form id="login-form" onsubmit="handleLogin(event)">
       <div class="form-group">
@@ -105,13 +104,9 @@
 <div class="toast-container" id="toast-container"></div>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
-function fillUser(u) {
-  document.getElementById('login-username').value = u;
-  document.getElementById('login-password').focus();
-}
-function fillCreds(u, p) {
-  document.getElementById('login-username').value = u;
-  document.getElementById('login-password').value = p;
+function fillDemo() {
+  document.getElementById('login-username').value = 'demo_viewer';
+  document.getElementById('login-password').value = 'DemoViewer#2025!';
 }
 
 async function handleLogin(e) {
@@ -125,17 +120,20 @@ async function handleLogin(e) {
   try {
     const res = await API.post('/api/auth/login', { username: u, password: p });
     if (res.user && res.user.must_change_password) {
-      ToastManager.show(`Welcome! Please update your default password.`, 'warning');
-    } else {
-      ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
+      ToastManager.show('Initial login detected. Please set a new password.', 'warning');
+      setTimeout(() => {
+        window.location.href = '/change-password';
+      }, 700);
+      return;
     }
+    ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
     setTimeout(() => {
       const params = new URLSearchParams(window.location.search);
       const nextUrl = params.get('next') || '/';
       window.location.href = nextUrl;
     }, 600);
   } catch(err) {
-    ToastManager.show(err.message, 'error');
+    ToastManager.show(err.message || 'Invalid credentials or account locked', 'error');
     btn.disabled = false;
     btn.textContent = 'Sign In';
   }

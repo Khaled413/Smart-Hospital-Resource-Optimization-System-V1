@@ -24,6 +24,9 @@ class User(db.Model):
     full_name = db.Column(db.String(150), default='')
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctors.id'), nullable=True)
     must_change_password = db.Column(db.Boolean, default=False, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    failed_login_attempts = db.Column(db.Integer, default=0, nullable=False)
+    locked_until = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     doctor = db.relationship('Doctor', backref=db.backref('user_account', uselist=False))
@@ -42,6 +45,7 @@ class User(db.Model):
             'role': self.role,
             'full_name': self.full_name or self.username,
             'doctor_id': self.doctor_id,
+            'is_active': self.is_active,
             'must_change_password': self.must_change_password
         }
 

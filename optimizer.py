@@ -720,6 +720,7 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
         now_dt = datetime.now()
 
     now_mins = now_dt.hour * 60 + now_dt.minute
+    is_today = (target_date == now_dt.strftime('%Y-%m-%d'))
 
     compat_docs = [
         d for d in doctors
@@ -735,7 +736,7 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
         doc_start = time_to_minutes(doc.available_from)
         doc_end = time_to_minutes(doc.available_until)
 
-        slot_candidate = max(now_mins, doc_start)
+        slot_candidate = max(now_mins if is_today else 0, doc_start)
         rem = slot_candidate % 15
         if rem != 0:
             slot_candidate += (15 - rem)
@@ -782,6 +783,8 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
         prio = getattr(appt.patient, 'priority', 'normal')
         if prio in ('normal', 'low'):
             appt_start = time_to_minutes(appt.start_time)
+            if is_today and appt_start < now_mins:
+                continue
             doctor = next((d for d in doctors if d.id == appt.doctor_id), None)
             if doctor and (doctor in compat_docs or not compat_docs):
                 candidates.append((appt_start, appt, doctor))

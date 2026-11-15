@@ -9,6 +9,12 @@ import sys
 
 # Add root directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+os.environ['ADMIN_INITIAL_PASSWORD'] = 'Admin#2025!'
+os.environ['MANAGER_INITIAL_PASSWORD'] = 'Manager#2025!'
+os.environ['DOCTOR_INITIAL_PASSWORD'] = 'Doctor#2025!'
+os.environ['RECEPTIONIST_INITIAL_PASSWORD'] = 'Reception#2025!'
+os.environ['DEMO_MODE'] = 'true'
+os.environ['RATELIMIT_ENABLED'] = 'false'
 
 from app import app, limiter
 from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User
@@ -44,6 +50,73 @@ def test_user_authentication(client):
     # Failed login
     res_fail = client.post('/api/auth/login', json={'username': 'admin', 'password': 'wrongpassword'})
     assert res_fail.status_code == 401
+
+
+def test_account_lockout_after_multiple_failed_logins(client):
+    """Verify account is temporarily locked out after 5 consecutive failed login attempts."""
+    # Reset attempts first
+    with app.app_context():
+        u = User.query.filter_by(username='admin').first()
+        if u:
+            u.failed_login_attempts = 0
+            u.locked_until = None
+            db.session.commit()
+
+    # Attempt 4 failed logins
+    for i in range(4):
+        res = client.post('/api/auth/login', json={'username': 'admin', 'password': f'badpwd_{i}'})
+        assert res.status_code == 401
+        assert 'Invalid' in res.get_json()['error']
+
+    # 5th failed login triggers lockout (HTTP 403)
+    res_5 = client.post('/api/auth/login', json={'username': 'admin', 'password': 'badpwd_5'})
+    assert res_5.status_code == 403
+    assert 'locked' in res_5.get_json()['error'].lower()
+
+    # Even with correct password, account remains locked
+    res_locked = client.post('/api/auth/login', json={'username': 'admin', 'password': 'Admin#2025!'})
+    assert res_locked.status_code == 403
+    assert 'locked' in res_locked.get_json()['error'].lower()
+
+    # Reset lockout for following tests
+    with app.app_context():
+        u = User.query.filter_by(username='admin').first()
+        if u:
+            u.failed_login_attempts = 0
+            u.locked_until = None
+            db.session.commit()
+
+
+def test_all_api_routes_require_authentication(client):
+    """
+    Dynamically iterate over every route registered in app.url_map.
+    Every route starting with /api/ (except /api/auth/login and /api/auth/me)
+    MUST return HTTP 401 when accessed without an active session.
+    """
+    public_endpoints = {'/api/auth/login', '/api/auth/me'}
+    tested_count = 0
+    import re
+
+    for rule in app.url_map.iter_rules():
+        path = rule.rule
+        if not path.startswith('/api/') or path in public_endpoints:
+            continue
+
+        # Convert URL parameters like <int:id>, <id> to dummy values
+        test_path = re.sub(r'<[^>]*int[^>]*>', '1', path)
+        test_path = re.sub(r'<[^>]+>', '1', test_path)
+
+        for method in rule.methods:
+            if method in {'HEAD', 'OPTIONS'}:
+                continue
+            res = client.open(test_path, method=method)
+            assert res.status_code == 401, (
+                f"Route {method} {test_path} (rule: {rule.rule}) is not protected! "
+                f"Returned {res.status_code} instead of 401."
+            )
+            tested_count += 1
+
+    assert tested_count >= 15, f"Expected at least 15 API routes to be tested, got {tested_count}"
 
 
 def test_rbac_and_protected_routes(client):
@@ -459,3 +532,49 @@ def test_unique_constraint_conflicts(client):
     res2 = client.post('/api/rooms', json={'room_number': 'UNIQUE-TEST-101', 'department_id': 1})
     assert res2.status_code == 409
     assert 'already exists' in res2.get_json()['error']
+
+
+def test_no_credentials_exposed_in_rendered_login_html(client):
+    """Verify login page never leaks passwords or admin autofill buttons."""
+    # When DEMO_MODE is False (default production)
+    app.config['DEMO_MODE'] = False
+    res = client.get('/login')
+    html = res.get_data(as_text=True)
+
+    # Must NOT expose passwords or autofill buttons
+    assert 'admin123' not in html
+    assert 'Admin#2025!' not in html
+    assert 'Doctor#2025!' not in html
+    assert 'Manager#2025!' not in html
+    assert 'Reception#2025!' not in html
+    assert 'Quick Select Role' not in html
+    assert '👑 Admin' not in html
+
+
+def test_security_headers_present(client):
+    """Verify critical HTTP security headers are set on all responses."""
+    res = client.get('/login')
+    assert res.headers.get('X-Content-Type-Options') == 'nosniff'
+    assert res.headers.get('X-Frame-Options') == 'SAMEORIGIN'
+    assert 'Content-Security-Policy' in res.headers
+    assert res.headers.get('Referrer-Policy') == 'strict-origin-when-cross-origin'
+
+
+def test_csv_export_formula_injection_sanitization(client):
+    """Verify CSV export sanitizes formulas starting with =, +, -, @ to prevent spreadsheet injection."""
+    login_as(client, 'admin', 'Admin#2025!')
+    # Register patient with formula injection name
+    malicious_name = "=SUM(1+1)"
+    client.post('/api/patients', json={
+        'name': malicious_name,
+        'age': 30,
+        'gender': 'Male',
+        'required_specialization': 'Cardiology'
+    })
+
+    res = client.get('/api/export/appointments/csv')
+    assert res.status_code == 200
+    csv_text = res.get_data(as_text=True)
+    # If the malicious name appeared, it must be escaped with a single quote prefix
+    if malicious_name in csv_text:
+        assert f"'{malicious_name}" in csv_text
