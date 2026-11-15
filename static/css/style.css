@@ -434,6 +434,59 @@ tbody tr:last-child { border-bottom: none; }
 .form-control::placeholder { color: #94a3b8; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 
+/* ── Password Visibility Preview & Field Wrap ── */
+.password-field-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.password-field-wrap .form-control {
+  padding-right: 42px;
+}
+[dir="rtl"] .password-field-wrap .form-control,
+body.rtl .password-field-wrap .form-control {
+  padding-right: 14px;
+  padding-left: 42px;
+}
+.password-toggle-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+  user-select: none;
+  line-height: 1;
+}
+.password-toggle-btn:hover {
+  color: var(--primary);
+  background-color: #f1f5f9;
+}
+.password-toggle-btn:active {
+  transform: translateY(-50%) scale(0.95);
+}
+.password-toggle-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2;
+  pointer-events: none;
+}
+[dir="rtl"] .password-toggle-btn,
+body.rtl .password-toggle-btn {
+  right: auto;
+  left: 6px;
+}
+
 /* ── Search Bar & Toolbar ── */
 .search-bar {
   display: flex; align-items: center; gap: 10px;

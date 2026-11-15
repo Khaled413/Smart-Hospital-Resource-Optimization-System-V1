@@ -17,7 +17,7 @@ os.environ['DEMO_MODE'] = 'true'
 os.environ['RATELIMIT_ENABLED'] = 'false'
 
 from app import app, limiter
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User
+from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User, Role, Permission, UserPermissionOverride
 from optimizer import (
     run_greedy, run_lp, run_hybrid, handle_emergency_preemption,
     predict_no_show_risk, run_scenario_simulation, run_optimization,
@@ -825,4 +825,23 @@ def test_seed_database_idempotency(client):
     roles = res.get_json()['roles']
     role_names = {r['name'] for r in roles}
     assert {'admin', 'manager', 'doctor', 'receptionist', 'demo_viewer'}.issubset(role_names)
+
+
+def test_password_toggle_elements_present(client):
+    """Verify password inputs on login and change-password pages include password visibility toggle buttons."""
+    # 1. Login page
+    res_login = client.get('/login')
+    html_login = res_login.get_data(as_text=True)
+    assert 'password-toggle-btn' in html_login
+    assert 'password-field-wrap' in html_login
+    assert 'data-target="login-password"' in html_login
+
+    # 2. Change password page
+    login_as(client, 'admin', 'Admin#2025!')
+    res_cp = client.get('/change-password')
+    html_cp = res_cp.get_data(as_text=True)
+    assert 'data-target="current-password"' in html_cp
+    assert 'data-target="new-password"' in html_cp
+    assert 'data-target="confirm-password"' in html_cp
+
 
