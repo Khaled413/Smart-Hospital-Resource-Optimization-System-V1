@@ -23,6 +23,7 @@ from models import (
 from optimizer import (
     run_optimization, handle_emergency_preemption,
     run_scenario_simulation, predict_no_show_risk,
+    sync_triage_and_priority,
     time_to_minutes, minutes_to_time
 )
 from seed_data import seed_database
@@ -41,6 +42,8 @@ limiter = Limiter(
     default_limits=[],
     storage_uri="memory://"
 )
+if app.config.get('TESTING') or app.config.get('RATELIMIT_ENABLED') is False:
+    limiter.enabled = False
 
 @app.errorhandler(429)
 def ratelimit_handler(e):
@@ -377,12 +380,13 @@ def api_dashboard():
     avg_wait = (sum(a.waiting_time for a in appts) / len(appts)) if appts else 0
 
     doctors = Doctor.query.all()
-    total_slots = sum(
-        (time_to_minutes(d.available_until) - time_to_minutes(d.available_from)) // 30
+    total_avail_minutes = sum(
+        (time_to_minutes(d.available_until) - time_to_minutes(d.available_from))
         for d in doctors
     )
-    scheduled_today = Appointment.query.filter_by(date=today, status='scheduled').count()
-    utilization = round((scheduled_today / total_slots * 100), 1) if total_slots > 0 else 0
+    scheduled_today_appts = Appointment.query.filter_by(date=today, status='scheduled').all()
+    booked_today_minutes = sum(a.duration_minutes for a in scheduled_today_appts)
+    utilization = round((booked_today_minutes / total_avail_minutes * 100), 1) if total_avail_minutes > 0 else 0
 
     priority_dist = {}
     for p in Patient.query.all():
@@ -444,15 +448,19 @@ def api_add_patient():
     if not data.get('name'):
         return jsonify({'error': 'Patient name is required'}), 400
 
+    priority, triage_level = sync_triage_and_priority(
+        data.get('priority'), safe_int(data.get('triage_level'), None)
+    )
+
     patient = Patient(
         name=data.get('name'),
         age=safe_int(data.get('age'), 0),
         gender=data.get('gender', 'Unknown'),
-        priority=data.get('priority', 'normal'),
+        priority=priority,
         required_specialization=data.get('required_specialization', ''),
         condition_description=data.get('condition_description', ''),
         preferred_date=data.get('preferred_date', ''),
-        triage_level=safe_int(data.get('triage_level'), 3),
+        triage_level=triage_level,
         blood_pressure=data.get('blood_pressure', '120/80'),
         heart_rate=safe_int(data.get('heart_rate'), 75),
         spo2=safe_int(data.get('spo2'), 98),
@@ -473,11 +481,19 @@ def api_add_patient():
 def api_update_patient(pid):
     patient = db.get_or_404(Patient, pid)
     data = request.get_json() or {}
-    for field in ['name', 'age', 'gender', 'priority', 'required_specialization',
-                  'condition_description', 'preferred_date', 'triage_level',
+    for field in ['name', 'age', 'gender', 'required_specialization',
+                  'condition_description', 'preferred_date',
                   'blood_pressure', 'heart_rate', 'spo2', 'temperature']:
         if field in data:
             setattr(patient, field, data[field])
+
+    if 'priority' in data or 'triage_level' in data:
+        prio, triage = sync_triage_and_priority(
+            data.get('priority', patient.priority),
+            safe_int(data.get('triage_level'), patient.triage_level)
+        )
+        patient.priority = prio
+        patient.triage_level = triage
 
     # Recalculate ML no-show risk
     patient.no_show_risk = predict_no_show_risk(patient)
@@ -856,7 +872,8 @@ def api_emergency_walkin():
     existing_appts = Appointment.query.filter_by(date=today_iso).all()
 
     # 3. Run Emergency Preemption Engine
-    res = handle_emergency_preemption(patient, existing_appts, doctors, rooms, today_iso)
+    app_tz = app.config.get('APP_TIMEZONE', 'Africa/Cairo')
+    res = handle_emergency_preemption(patient, existing_appts, doctors, rooms, today_iso, app_timezone=app_tz)
 
     if res['action'] == 'failed':
         db.session.commit()
@@ -887,16 +904,21 @@ def api_emergency_walkin():
     bumped_msg = None
     if res['action'] == 'preempted':
         bumped_id = res['bumped_appointment_id']
+        bumped_plan = res.get('bumped_plan') or {}
         bumped_appt = db.session.get(Appointment, bumped_id)
         if bumped_appt:
-            # Shift bumped appointment later
-            new_start_min = time_to_minutes(assign['end_time']) + 10
-            new_end_min = new_start_min + bumped_appt.duration_minutes
-            bumped_appt.start_time = minutes_to_time(new_start_min)
-            bumped_appt.end_time = minutes_to_time(new_end_min)
-            bumped_appt.waiting_time += assign['duration_minutes'] + 10
-            bumped_appt.notes = f"Rescheduled due to Emergency Code Red insertion #{emergency_appt.id}"
-            bumped_msg = f"Patient {bumped_appt.patient.name}'s appointment bumped to {bumped_appt.start_time}"
+            if bumped_plan.get('rescheduled_slot'):
+                slot = bumped_plan['rescheduled_slot']
+                bumped_appt.start_time = slot['start_time']
+                bumped_appt.end_time = slot['end_time']
+                bumped_appt.room_id = slot['room_id']
+                bumped_appt.waiting_time = slot['waiting_time']
+                bumped_appt.notes = f"Rescheduled to {slot['start_time']} due to Emergency Code Red insertion #{emergency_appt.id}"
+                bumped_msg = f"Patient {bumped_appt.patient.name}'s appointment relocated to {slot['start_time']}"
+            else:
+                bumped_appt.status = 'needs_reschedule'
+                bumped_appt.notes = f"Preempted by Emergency Code Red #{emergency_appt.id} (Doctor shift full, needs reschedule)"
+                bumped_msg = f"Patient {bumped_appt.patient.name} bumped (shift full, marked for rescheduling)"
 
     db.session.commit()
     log_audit('EMERGENCY', 'appointment', emergency_appt.id, f"Code Red admitted for {patient.name}")
@@ -925,56 +947,82 @@ def api_optimize():
     doctors = Doctor.query.all()
     rooms = Room.query.all()
 
-    patients_to_schedule = [
+    existing_appts = Appointment.query.filter_by(date=target_date).all()
+    active_appts = [a for a in existing_appts if a.status in ('scheduled', 'in_progress', 'completed')]
+    if clear_existing:
+        already_scheduled_patient_ids = {a.patient_id for a in active_appts if a.is_emergency}
+    else:
+        already_scheduled_patient_ids = {a.patient_id for a in active_appts}
+
+    unscheduled_patients = [
         p for p in patients
+        if p.id not in already_scheduled_patient_ids
+    ]
+
+    if not unscheduled_patients:
+        return jsonify({
+            'status': 'warning',
+            'message': f'All eligible patients are already scheduled for {target_date}.',
+            'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0}
+        })
+
+    # Filter patients with target_date or unassigned preferred_date
+    patients_to_schedule = [
+        p for p in unscheduled_patients
         if not p.preferred_date or p.preferred_date == target_date
     ]
 
     if not patients_to_schedule:
-        return jsonify({
-            'status': 'warning',
-            'message': f'No patients with preferred date {target_date}. Using all available patients.',
-            'metrics': {'total': 0, 'assigned': 0, 'unassigned': len(patients)}
-        })
+        # When no patients specifically requested target_date, use all remaining unscheduled patients
+        patients_to_schedule = unscheduled_patients
 
-    if clear_existing:
-        Appointment.query.filter_by(date=target_date, is_emergency=False).delete()
+    try:
+        with db.session.begin_nested():
+            if clear_existing:
+                Appointment.query.filter_by(date=target_date, is_emergency=False).delete()
+                db.session.flush()
+
+            remaining_existing = Appointment.query.filter_by(date=target_date).all()
+            result = run_optimization(algorithm, patients_to_schedule, doctors, rooms, target_date, existing_appointments=remaining_existing)
+
+            run = OptimizationRun(
+                algorithm=algorithm,
+                algorithm_used=result.get('algorithm_used', algorithm),
+                fallback_reason=result.get('fallback_reason'),
+                run_date=target_date,
+                total_patients=result['metrics']['total'],
+                assigned_patients=result['metrics']['assigned'],
+                unassigned_patients=result['metrics']['unassigned'],
+                avg_wait_time=result['metrics']['avg_wait_time'],
+                utilization_rate=result['metrics']['utilization_rate'],
+                status='success' if result['metrics']['assigned'] > 0 else 'partial',
+                solver_log='\n'.join(result['log'])
+            )
+            db.session.add(run)
+            db.session.flush()
+
+            for a in result['assignments']:
+                appt = Appointment(
+                    patient_id=a['patient'].id,
+                    doctor_id=a['doctor'].id,
+                    room_id=a['room'].id,
+                    date=a['date'],
+                    start_time=a['start_time'],
+                    end_time=a['end_time'],
+                    duration_minutes=a.get('duration_minutes', 30),
+                    buffer_minutes=a.get('buffer_minutes', 10),
+                    waiting_time=a['waiting_time'],
+                    status='scheduled',
+                    optimization_run_id=run.id
+                )
+                db.session.add(appt)
+
         db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Optimization transaction failed: {str(e)}'}), 500
 
-    result = run_optimization(algorithm, patients_to_schedule, doctors, rooms, target_date)
-
-    run = OptimizationRun(
-        algorithm=algorithm,
-        run_date=target_date,
-        total_patients=result['metrics']['total'],
-        assigned_patients=result['metrics']['assigned'],
-        unassigned_patients=result['metrics']['unassigned'],
-        avg_wait_time=result['metrics']['avg_wait_time'],
-        utilization_rate=result['metrics']['utilization_rate'],
-        status='success' if result['metrics']['assigned'] > 0 else 'partial',
-        solver_log='\n'.join(result['log'])
-    )
-    db.session.add(run)
-    db.session.flush()
-
-    for a in result['assignments']:
-        appt = Appointment(
-            patient_id=a['patient'].id,
-            doctor_id=a['doctor'].id,
-            room_id=a['room'].id,
-            date=a['date'],
-            start_time=a['start_time'],
-            end_time=a['end_time'],
-            duration_minutes=a.get('duration_minutes', 30),
-            buffer_minutes=a.get('buffer_minutes', 10),
-            waiting_time=a['waiting_time'],
-            status='scheduled',
-            optimization_run_id=run.id
-        )
-        db.session.add(appt)
-
-    db.session.commit()
-    log_audit('OPTIMIZE', 'optimization_run', run.id, f"Executed {algorithm} optimization ({run.assigned_patients}/{run.total_patients} assigned)")
+    log_audit('OPTIMIZE', 'optimization_run', run.id, f"Executed {run.algorithm_used} optimization ({run.assigned_patients}/{run.total_patients} assigned)")
 
     assignments_out = [
         {
@@ -1001,6 +1049,8 @@ def api_optimize():
         'status': 'success',
         'run_id': run.id,
         'algorithm': algorithm,
+        'algorithm_used': run.algorithm_used,
+        'fallback_reason': run.fallback_reason,
         'metrics': result['metrics'],
         'assignments': assignments_out,
         'unassigned': unassigned_out,
@@ -1056,16 +1106,20 @@ def api_analytics_wait_time():
 @login_required
 @role_required(['admin', 'manager'])
 def api_analytics_utilization():
+    target_date = request.args.get('date', date.today().isoformat())
     doctors = Doctor.query.all()
     util_data = []
     for doc in doctors:
-        total_slots = (time_to_minutes(doc.available_until) - time_to_minutes(doc.available_from)) // 30
-        booked = Appointment.query.filter_by(doctor_id=doc.id).count()
-        util_pct = round((booked / total_slots * 100), 1) if total_slots > 0 else 0
+        avail_mins = time_to_minutes(doc.available_until) - time_to_minutes(doc.available_from)
+        total_slots = avail_mins // 30
+        doc_appts = Appointment.query.filter_by(doctor_id=doc.id, date=target_date, status='scheduled').all()
+        booked_mins = sum(a.duration_minutes for a in doc_appts)
+        util_pct = round((booked_mins / avail_mins * 100), 1) if avail_mins > 0 else 0
         util_data.append({
             'doctor': doc.name,
             'specialization': doc.specialization,
-            'booked': booked,
+            'booked': len(doc_appts),
+            'booked_minutes': booked_mins,
             'total_slots': total_slots,
             'utilization': min(util_pct, 100)
         })

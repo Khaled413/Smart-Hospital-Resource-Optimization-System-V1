@@ -78,6 +78,7 @@ class TestingConfig(Config):
     DEBUG = True
     SESSION_COOKIE_SECURE = False
     WTF_CSRF_ENABLED = False
+    RATELIMIT_ENABLED = False
 
 
 config_by_name = {
