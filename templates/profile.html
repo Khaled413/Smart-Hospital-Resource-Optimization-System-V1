@@ -2,119 +2,248 @@
 
 {% block title %}Profile Settings — MediOptim Pro{% endblock %}
 {% block page_title %}<span data-i18n="profile_title">Profile Settings</span>{% endblock %}
-{% block page_subtitle %}<span data-i18n="profile_subtitle">Manage your personal information, credentials, and review assigned permissions</span>{% endblock %}
+{% block page_subtitle %}<span data-i18n="profile_subtitle">Manage your staff credentials and personal account preferences</span>{% endblock %}
+
+{% block extra_head %}
+<style>
+  .profile-container {
+    max-width: 820px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .profile-header-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+  }
+  .profile-avatar-circle {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: 800;
+    box-shadow: 0 6px 16px rgba(2, 132, 199, 0.28);
+    flex-shrink: 0;
+  }
+  .profile-details-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  @media (min-width: 768px) {
+    .profile-details-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+  .profile-section-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .section-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 16px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .section-icon-box {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+  .password-field-wrap {
+    position: relative !important;
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+  }
+  .password-field-wrap .form-control {
+    width: 100% !important;
+    padding-right: 44px !important;
+    box-sizing: border-box !important;
+  }
+  body.rtl .password-field-wrap .form-control,
+  [dir="rtl"] .password-field-wrap .form-control {
+    padding-right: 14px !important;
+    padding-left: 44px !important;
+  }
+  .password-toggle-btn {
+    position: absolute !important;
+    right: 8px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    background: transparent !important;
+    border: none !important;
+    color: #64748b !important;
+    cursor: pointer !important;
+    padding: 6px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    z-index: 5 !important;
+    line-height: 1 !important;
+    border-radius: 6px !important;
+  }
+  .password-toggle-btn:hover {
+    color: #0284c7 !important;
+    background: #f1f5f9 !important;
+  }
+  body.rtl .password-toggle-btn,
+  [dir="rtl"] .password-toggle-btn {
+    right: auto !important;
+    left: 8px !important;
+  }
+  .password-toggle-btn svg {
+    width: 18px !important;
+    height: 18px !important;
+    stroke: currentColor;
+    pointer-events: none !important;
+  }
+</style>
+{% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:24px;max-width:1200px;">
-  
-  <!-- Card 1: Personal Profile Details -->
-  <div class="card" style="padding:24px;border-radius:14px;">
-    <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border-color,#e2e8f0);">
-      <div id="profile-avatar" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg, #0284c7 0%, #0369a1 100%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;box-shadow:0 4px 10px rgba(2,132,199,0.25);">
-        U
+<div class="profile-container">
+
+  <!-- Hospital Staff Header Banner -->
+  <div class="profile-header-card">
+    <div class="profile-avatar-circle" id="profile-avatar">
+      U
+    </div>
+    <div style="flex:1;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <h2 id="profile-display-name" style="margin:0;font-size:22px;font-weight:800;color:#0f172a;letter-spacing:-0.5px;">Loading Profile...</h2>
+        <span id="profile-role-badge" class="badge" style="background:#0284c7;color:#fff;font-size:11px;padding:3px 10px;border-radius:12px;font-weight:700;">STAFF</span>
       </div>
-      <div>
-        <h3 id="profile-display-name" style="margin:0;font-size:18px;font-weight:700;color:var(--text-primary,#0f172a);">Loading User...</h3>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-          <span id="profile-role-badge" class="badge" style="background:#0284c7;color:#fff;font-size:11px;padding:3px 8px;">STAFF</span>
-          <span id="profile-doctor-tag" style="font-size:12px;color:var(--text-secondary,#64748b);font-weight:500;"></span>
-        </div>
+      <div style="display:flex;align-items:center;gap:14px;margin-top:6px;font-size:13px;color:#64748b;flex-wrap:wrap;">
+        <span id="profile-header-username" style="display:flex;align-items:center;gap:4px;">
+          <span>🆔</span> <span id="val-header-user">admin</span>
+        </span>
+        <span id="profile-doctor-tag" style="display:flex;align-items:center;gap:4px;color:#0369a1;font-weight:600;"></span>
+        <span style="display:flex;align-items:center;gap:4px;">
+          <span style="color:#10b981;">●</span> Active Staff Account
+        </span>
       </div>
     </div>
-
-    <form id="profile-form" onsubmit="saveProfileDetails(event)">
-      <div class="form-group" style="margin-bottom:14px;">
-        <label class="form-label">Username (System Identifier)</label>
-        <input class="form-control" id="profile-username" readonly style="background:#f8fafc;cursor:not-allowed;color:#64748b;">
-      </div>
-
-      <div class="form-group" style="margin-bottom:14px;">
-        <label class="form-label">Full Name *</label>
-        <input class="form-control" id="profile-fullname" required placeholder="e.g. Dr. Sarah Mitchell">
-      </div>
-
-      <div class="form-group" style="margin-bottom:20px;">
-        <label class="form-label">Email Address *</label>
-        <input class="form-control" type="email" id="profile-email" required placeholder="user@hospital.org">
-      </div>
-
-      <div style="display:flex;justify-content:flex-end;">
-        <button type="submit" class="btn btn-primary" id="btn-save-profile">
-          💾 <span data-i18n="save_changes">Save Profile Changes</span>
-        </button>
-      </div>
-    </form>
   </div>
 
-  <!-- Card 2: Password & Security -->
-  <div class="card" style="padding:24px;border-radius:14px;">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border-color,#e2e8f0);">
-      <div style="width:40px;height:40px;border-radius:10px;background:#fef3c7;color:#d97706;display:flex;align-items:center;justify-content:center;font-size:20px;">
-        🔒
-      </div>
+  <!-- Profile Sections Grid: Personal Info + Security -->
+  <div class="profile-details-grid">
+
+    <!-- Card 1: Personal Profile Details -->
+    <div class="profile-section-card">
       <div>
-        <h3 style="margin:0;font-size:17px;font-weight:700;color:var(--text-primary,#0f172a);">Security & Password</h3>
-        <div style="font-size:12px;color:var(--text-secondary,#64748b);margin-top:2px;">Update your login credentials securely</div>
+        <div class="section-card-header">
+          <div class="section-icon-box" style="background:#e0f2fe;color:#0284c7;">
+            👤
+          </div>
+          <div>
+            <h3 style="margin:0;font-size:16px;font-weight:700;color:#0f172a;">Personal Information</h3>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">Update your name and hospital contact email</div>
+          </div>
+        </div>
+
+        <form id="profile-form" onsubmit="saveProfileDetails(event)">
+          <div class="form-group" style="margin-bottom:14px;">
+            <label class="form-label">System Username</label>
+            <input class="form-control" id="profile-username" readonly style="background:#f8fafc;cursor:not-allowed;color:#64748b;font-weight:600;">
+          </div>
+
+          <div class="form-group" style="margin-bottom:14px;">
+            <label class="form-label">Full Name *</label>
+            <input class="form-control" id="profile-fullname" required placeholder="e.g. Dr. Sarah Mitchell">
+          </div>
+
+          <div class="form-group" style="margin-bottom:20px;">
+            <label class="form-label">Email Address *</label>
+            <input class="form-control" type="email" id="profile-email" required placeholder="user@hospital.org">
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;">
+            <button type="submit" class="btn btn-primary" id="btn-save-profile" style="padding:9px 18px;font-weight:600;">
+              💾 <span data-i18n="save_changes">Save Profile Changes</span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
 
-    <form id="change-pwd-form" onsubmit="handlePasswordChange(event)">
-      <div class="form-group" style="margin-bottom:14px;">
-        <label class="form-label">Current Password *</label>
-        <div class="password-field-wrap">
-          <input class="form-control" type="password" id="pwd-current" required placeholder="Enter current password" autocomplete="current-password">
-          <button type="button" class="password-toggle-btn" data-target="pwd-current" title="Show password" aria-label="Show password">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          </button>
+    <!-- Card 2: Password & Credentials -->
+    <div class="profile-section-card">
+      <div>
+        <div class="section-card-header">
+          <div class="section-icon-box" style="background:#fef3c7;color:#d97706;">
+            🔒
+          </div>
+          <div>
+            <h3 style="margin:0;font-size:16px;font-weight:700;color:#0f172a;">Password & Security</h3>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">Change your login password securely</div>
+          </div>
         </div>
-      </div>
 
-      <div class="form-group" style="margin-bottom:14px;">
-        <label class="form-label">New Password * (Min 8 characters)</label>
-        <div class="password-field-wrap">
-          <input class="form-control" type="password" id="pwd-new" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password">
-          <button type="button" class="password-toggle-btn" data-target="pwd-new" title="Show password" aria-label="Show password">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          </button>
-        </div>
-      </div>
+        <form id="change-pwd-form" onsubmit="handlePasswordChange(event)">
+          <div class="form-group" style="margin-bottom:14px;">
+            <label class="form-label">Current Password *</label>
+            <div class="password-field-wrap">
+              <input class="form-control" type="password" id="pwd-current" required placeholder="Enter current password" autocomplete="current-password">
+              <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('pwd-current', this)" title="Show password" aria-label="Show password">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+          </div>
 
-      <div class="form-group" style="margin-bottom:20px;">
-        <label class="form-label">Confirm New Password *</label>
-        <div class="password-field-wrap">
-          <input class="form-control" type="password" id="pwd-confirm" required minlength="8" placeholder="Re-enter new password" autocomplete="new-password">
-          <button type="button" class="password-toggle-btn" data-target="pwd-confirm" title="Show password" aria-label="Show password">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          </button>
-        </div>
-      </div>
+          <div class="form-group" style="margin-bottom:14px;">
+            <label class="form-label">New Password * (Min 8 characters)</label>
+            <div class="password-field-wrap">
+              <input class="form-control" type="password" id="pwd-new" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password">
+              <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('pwd-new', this)" title="Show password" aria-label="Show password">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+          </div>
 
-      <div style="display:flex;justify-content:flex-end;">
-        <button type="submit" class="btn btn-warning" id="btn-update-pwd">
-          🔐 Update Password
-        </button>
-      </div>
-    </form>
-  </div>
+          <div class="form-group" style="margin-bottom:20px;">
+            <label class="form-label">Confirm New Password *</label>
+            <div class="password-field-wrap">
+              <input class="form-control" type="password" id="pwd-confirm" required minlength="8" placeholder="Re-enter new password" autocomplete="new-password">
+              <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('pwd-confirm', this)" title="Show password" aria-label="Show password">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+          </div>
 
-  <!-- Card 3: Assigned Role & Permissions Matrix -->
-  <div class="card" style="padding:24px;border-radius:14px;grid-column:1/-1;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border-color,#e2e8f0);">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <div style="width:38px;height:38px;border-radius:10px;background:#e0f2fe;color:#0284c7;display:flex;align-items:center;justify-content:center;font-size:18px;">
-          🛡️
-        </div>
-        <div>
-          <h3 style="margin:0;font-size:17px;font-weight:700;color:var(--text-primary,#0f172a);">Active Permissions & System Privileges</h3>
-          <div style="font-size:12px;color:var(--text-secondary,#64748b);">Directly enforced server-side for this account</div>
-        </div>
+          <div style="display:flex;justify-content:flex-end;">
+            <button type="submit" class="btn btn-warning" id="btn-update-pwd" style="padding:9px 18px;font-weight:600;">
+              🔐 Update Password
+            </button>
+          </div>
+        </form>
       </div>
-      <span id="perms-count-badge" class="badge" style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;font-size:12px;">0 Permissions</span>
     </div>
 
-    <div id="user-perms-list" style="display:flex;flex-wrap:wrap;gap:8px;max-height:280px;overflow-y:auto;padding:8px 0;">
-      <div style="color:#64748b;font-size:13px;">Loading permissions...</div>
-    </div>
   </div>
 
 </div>
@@ -122,6 +251,25 @@
 
 {% block extra_scripts %}
 <script>
+const PasswordToggleIcons = {
+  eye: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>`,
+  eyeOff: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"></path><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"></path><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"></path><line x1="2" x2="22" y1="2" y2="22"></line></svg>`
+};
+
+function togglePasswordVisibility(targetId, btn) {
+  const input = document.getElementById(targetId);
+  if (!input) return;
+  const isNowText = input.type === 'password';
+  input.type = isNowText ? 'text' : 'password';
+  if (btn) {
+    btn.innerHTML = isNowText ? PasswordToggleIcons.eyeOff : PasswordToggleIcons.eye;
+    const isAr = document.documentElement.getAttribute('dir') === 'rtl';
+    const label = isNowText ? (isAr ? 'إخفاء كلمة المرور' : 'Hide password') : (isAr ? 'إظهار كلمة المرور' : 'Show password');
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+  }
+}
+
 let currentUserData = null;
 
 async function loadProfile() {
@@ -133,8 +281,9 @@ async function loadProfile() {
     }
     currentUserData = res.user;
     
-    // Populate header & fields
+    // Header information
     document.getElementById('profile-display-name').textContent = currentUserData.full_name || currentUserData.username;
+    document.getElementById('val-header-user').textContent = currentUserData.username;
     document.getElementById('profile-username').value = currentUserData.username;
     document.getElementById('profile-fullname').value = currentUserData.full_name || '';
     document.getElementById('profile-email').value = currentUserData.email || '';
@@ -158,37 +307,9 @@ async function loadProfile() {
         docTag.textContent = '';
       }
     }
-
-    // Populate permissions pills
-    renderPermissionsPills(currentUserData.permissions || []);
   } catch(err) {
     ToastManager.show(err.message || 'Error loading profile', 'error');
   }
-}
-
-function renderPermissionsPills(perms) {
-  const container = document.getElementById('user-perms-list');
-  const countBadge = document.getElementById('perms-count-badge');
-  if (countBadge) countBadge.textContent = `${perms.length} Permissions Active`;
-  if (!container) return;
-
-  if (!perms.length) {
-    container.innerHTML = `<div style="color:#94a3b8;font-size:13px;">No active permissions assigned.</div>`;
-    return;
-  }
-
-  container.innerHTML = perms.map(p => {
-    const isSensitive = p.includes('delete') || p.includes('manage') || p.includes('trigger') || p.includes('override');
-    const bg = isSensitive ? '#fef2f2' : '#f0fdf4';
-    const border = isSensitive ? '#fecaca' : '#bbf7d0';
-    const color = isSensitive ? '#991b1b' : '#166534';
-    return `
-      <div style="background:${bg};border:1px solid ${border};color:${color};padding:5px 10px;border-radius:20px;font-size:11.5px;font-family:monospace;display:flex;align-items:center;gap:6px;">
-        <span>${isSensitive ? '⚡' : '✓'}</span>
-        <span>${p}</span>
-      </div>
-    `;
-  }).join('');
 }
 
 async function saveProfileDetails(e) {

@@ -3,10 +3,10 @@ seed_data.py - Enhanced Sample Data Seeder for Smart Hospital Resource Optimizat
 Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Beds, Equipment, and Patients with clinical vitals.
 """
 
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, User, Appointment, Permission, Role, UserPermissionOverride
+from models import db, Department, Doctor, Patient, Room, Bed, Equipment, User, Appointment, OptimizationRun, Permission, Role, UserPermissionOverride
 from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import os
 import secrets
 
@@ -130,6 +130,7 @@ def seed_permissions_and_roles():
             if not user.role_id and r_obj:
                 user.role_id = r_obj.id
             user.is_active = True
+            user.must_change_password = False
             # Unlock account if previously locked out
             user.failed_login_attempts = 0
             user.locked_until = None
@@ -149,15 +150,8 @@ def seed_permissions_and_roles():
     return roles_by_name
 
 
-def seed_database():
-    """Seed comprehensive dataset if tables are empty."""
-    # Always ensure permissions and system roles are synced first
-    roles_by_name = seed_permissions_and_roles()
-
-    # Check if database needs seeding
-    if Department.query.count() > 0:
-        return
-
+def seed_base_data(roles_by_name):
+    """Seed base hospital entities (departments, doctors, users, rooms, beds, equipment, patients)."""
     print("[SEED] Starting comprehensive database seeding...")
 
     # ── 1. Departments ────────────────────────────────────────────────────────
@@ -204,68 +198,11 @@ def seed_database():
     import os
     import secrets
 
-    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD') or 'Admin#2025!'
-    manager_password = os.environ.get('MANAGER_INITIAL_PASSWORD') or 'Manager#2025!'
-    receptionist_password = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or 'Reception#2025!'
-    doctor_password = os.environ.get('DOCTOR_INITIAL_PASSWORD') or 'Doctor#2025!'
-    demo_password = os.environ.get('DEMO_PASSWORD') or 'DemoViewer#2025!'
-
-    users_data = [
-        {
-            "username": "admin",
-            "email": "admin@hospital.org",
-            "role": "admin",
-            "name": "Chief Administrator",
-            "pass": admin_initial_password,
-            "must_change": False
-        },
-        {
-            "username": "manager",
-            "email": "manager@hospital.org",
-            "role": "manager",
-            "name": "Operations Director",
-            "pass": manager_password,
-            "must_change": False
-        },
-        {
-            "username": "receptionist",
-            "email": "frontdesk@hospital.org",
-            "role": "receptionist",
-            "name": "Front Desk Reception",
-            "pass": receptionist_password,
-            "must_change": False
-        },
-        {
-            "username": "dr_sarah",
-            "email": "s.mitchell@hospital.org",
-            "role": "doctor",
-            "name": "Dr. Sarah Mitchell",
-            "pass": doctor_password,
-            "doc_id": docs[0].id,
-            "must_change": False
-        },
-        {
-            "username": "demo_viewer",
-            "email": "demo@hospital.org",
-            "role": "demo_viewer",
-            "name": "Public Demo Guest (Read-Only)",
-            "pass": demo_password,
-            "must_change": False
-        }
-    ]
-    for u in users_data:
-        r_obj = roles_by_name.get(u["role"])
-        user = User(
-            username=u["username"],
-            email=u["email"],
-            role=u["role"],
-            role_id=r_obj.id if r_obj else None,
-            full_name=u["name"],
-            doctor_id=u.get("doc_id"),
-            must_change_password=u.get("must_change", False)
-        )
-        user.set_password(u["pass"])
-        db.session.add(user)
+    # ── 3. Link Doctor Account ────────────────────────────────────────────────
+    sarah_user = User.query.filter_by(username='dr_sarah').first()
+    if sarah_user and docs:
+        sarah_user.doctor_id = docs[0].id
+        db.session.flush()
 
     # ── 4. Rooms ──────────────────────────────────────────────────────────────
     rooms_data = [
@@ -382,5 +319,208 @@ def seed_database():
     db.session.commit()
     print("[SEED] Comprehensive database seeded successfully!")
     print(f"[SEED] Created: {len(departments_data)} departments, {len(doctors_data)} doctors, "
-          f"{len(users_data)} users, {len(rooms_data)} rooms, {len(beds_data)} beds, "
+          f"{len(rooms_data)} rooms, {len(beds_data)} beds, "
           f"{len(equipment_data)} equipment, {len(patients_data)} patients")
+
+
+def seed_appointments_and_runs():
+    """Seed realistic clinical appointments and initial optimization run."""
+    if Appointment.query.count() > 0:
+        return
+
+    print("[SEED] Seeding realistic hospital appointments and telemetry...")
+    
+    # Resolve current date in configured timezone
+    try:
+        from config import Config
+        tz_name = getattr(Config, 'APP_TIMEZONE', 'Africa/Cairo')
+    except Exception:
+        tz_name = 'Africa/Cairo'
+    try:
+        import pytz
+        tz = pytz.timezone(tz_name)
+        now_dt = datetime.now(tz)
+    except Exception:
+        now_dt = datetime.now()
+
+    today_str = now_dt.strftime('%Y-%m-%d')
+    yesterday_str = (now_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+    tomorrow_str = (now_dt + timedelta(days=1)).strftime('%Y-%m-%d')
+
+    # Query existing entities
+    doctors_map = {d.name: d for d in Doctor.query.all()}
+    rooms_map = {r.room_number: r for r in Room.query.all()}
+    patients_map = {p.name: p for p in Patient.query.all()}
+
+    if not doctors_map or not rooms_map or not patients_map:
+        return
+
+    # 1. Create Initial Optimization Run
+    opt_run = OptimizationRun(
+        algorithm='hybrid',
+        algorithm_used='hybrid',
+        fallback_reason='',
+        run_date=today_str,
+        total_patients=20,
+        assigned_patients=20,
+        unassigned_patients=0,
+        avg_wait_time=24.5,
+        utilization_rate=68.4,
+        status='success',
+        solver_log=(
+            "[HYBRID] Starting Hybrid Scheduling (LP for Critical/Urgent + Greedy for Normal/Low)...\n"
+            "[HYBRID] High-priority queue: 10 patients\n"
+            "[HYBRID] Standard queue: 10 patients\n"
+            "[LP] Formulating MIP model with 980 candidate decision variables.\n"
+            "[LP] Executing CBC solver (limit 25s)...\n"
+            "[LP] Solver ended with status: Optimal (code=1)\n"
+            "[LP] 10/10 High-priority patients scheduled.\n"
+            "[GREEDY] Scheduling 10 standard patients with dynamic procedure durations.\n"
+            "[GREEDY] Finished. Assigned: 10, Unassigned: 0\n"
+            "[HYBRID] Final Result: Assigned=20, Unassigned=0, Room Conflicts=0"
+        ),
+        created_at=datetime.utcnow()
+    )
+    db.session.add(opt_run)
+    db.session.flush()
+
+    # 2. Appointment definitions for TODAY
+    appointments_today = [
+        # Cardiology (Dr. Sarah Mitchell, Dr. James Thornton)
+        ("Alice Johnson", "Dr. Sarah Mitchell", "C-101", "08:00", "08:40", 40, 10, 0, "completed", "Severe acute chest pain", "ECG performed; normal sinus rhythm restored with sublingual nitrates. Admitted to telemetry.", "Aspirin 81mg PO daily, Atorvastatin 40mg PO at bedtime"),
+        ("Frank Wilson", "Dr. Sarah Mitchell", "C-101", "08:50", "09:20", 30, 10, 20, "completed", "Routine pacemaker check", "Pacemaker battery life 85%, leads intact. Medication dosage maintained.", "Lisinopril 10mg PO daily"),
+        ("Karen Thompson", "Dr. Sarah Mitchell", "C-101", "09:30", "10:10", 40, 10, 15, "in_progress", "Hypertensive crisis evaluation", "IV Labetalol started, continuous BP monitoring at bedside.", "Labetalol 20mg IV bolus, monitor BP q15m"),
+        ("Peter Garcia", "Dr. James Thornton", "C-102", "09:15", "09:45", 30, 10, 0, "completed", "Post-coronary stenting 30d review", "Femoral puncture site healed cleanly. Dual antiplatelet therapy confirmed.", "Clopidogrel 75mg PO daily, Aspirin 81mg PO daily"),
+
+        # Neurology (Dr. Emily Chen, Dr. Robert Hayes)
+        ("Noah Jackson", "Dr. Emily Chen", "N-201", "08:30", "09:25", 55, 10, 0, "completed", "Sudden right arm weakness", "Immediate non-contrast CT brain negative for hemorrhage. Thrombolysis protocol initiated.", "Alteplase IV per neuro protocol, ICU admission"),
+        ("Ryan Lewis", "Dr. Emily Chen", "N-201", "09:45", "10:30", 45, 10, 15, "in_progress", "Cervical radiculopathy consultation", "C6-C7 disk protrusion on MRI; referred for targeted physical rehabilitation.", "Gabapentin 300mg PO TID, physical therapy referral"),
+        ("Bob Martinez", "Dr. Robert Hayes", "N-202", "10:15", "11:10", 55, 10, 25, "scheduled", "Acute migraine with hemiparesis", "Triptan administered, prophylactic topiramate titration started.", "Sumatriptan 50mg PO PRN, Topiramate 25mg PO QHS"),
+        ("Grace Lee", "Dr. Robert Hayes", "N-202", "11:20", "12:05", 45, 10, 10, "scheduled", "Mild tension headaches", "Sleep hygiene and stress management protocol provided.", "Acetaminophen 500mg PO PRN"),
+
+        # Orthopedics (Dr. Linda Park)
+        ("Henry Clark", "Dr. Linda Park", "O-302", "08:00", "08:30", 30, 10, 0, "completed", "Closed displaced radius fracture", "Closed reduction under Bier block successful, fiberglass splint applied.", "Ibuprofen 600mg PO TID PRN pain, sling immobilizer"),
+        ("Carol White", "Dr. Linda Park", "O-301", "08:40", "09:10", 30, 10, 15, "completed", "Right knee ACL strain", "Lachman test grade 1. Conservative management with brace and NSAIDs.", "Naproxen 500mg PO BID with meals"),
+        ("Tyler Young", "Dr. Linda Park", "O-302", "09:20", "09:50", 30, 10, 20, "scheduled", "Chronic lumbar disc herniation", "Scheduled for elective fluoroscopic epidural steroid injection.", "Cyclobenzaprine 5mg PO QHS"),
+        ("Mia Harris", "Dr. Linda Park", "O-301", "10:00", "10:30", 30, 10, 10, "scheduled", "Bilateral knee osteoarthritis", "Intra-articular hyaluronic acid injection administered.", "Topical Diclofenac gel 1% TID"),
+
+        # Pediatrics (Dr. Ahmed Al-Rashid)
+        ("Iris Taylor", "Dr. Ahmed Al-Rashid", "P-402", "08:00", "08:30", 30, 10, 0, "completed", "Peanut allergen exposure with stridor", "IM Epinephrine 0.15mg given; oxygen via cannula; stridor resolved.", "Diphenhydramine 12.5mg PO q6h PRN, Prednisolone 15mg PO daily x 3d"),
+        ("David Brown", "Dr. Ahmed Al-Rashid", "P-401", "08:40", "09:10", 30, 10, 10, "completed", "High fever with wheezing", "Nebulized salbutamol and oral dexamethasone administered. Afebrile.", "Albuterol inhaler 2 puffs q4h PRN, Amoxicillin 250mg/5ml TID"),
+        ("Sophia Walker", "Dr. Ahmed Al-Rashid", "P-402", "09:20", "09:50", 30, 10, 15, "in_progress", "Acute gastroenteritis with dehydration", "Oral rehydration therapy tolerated, electrolyte panel normal.", "Oral rehydration salts 500ml/day, Ondansetron 2mg ODT PRN"),
+        ("Liam Robinson", "Dr. Ahmed Al-Rashid", "P-401", "10:00", "10:20", 20, 10, 5, "scheduled", "Routine school physical & booster", "DTaP-IPV booster given, development on 50th percentile.", "Multivitamin chewable daily"),
+
+        # General Surgery (Dr. Maria Santos, Dr. Kevin O'Brien)
+        ("Emma Davis", "Dr. Maria Santos", "S-501", "07:00", "08:10", 70, 10, 0, "completed", "Acute appendicitis with peritonitis", "Laparoscopic appendectomy performed. Suppurative appendix removed, no perforation.", "Cefazolin 1g IV q8h, Acetaminophen 1000mg IV q6h"),
+        ("Olivia Martin", "Dr. Maria Santos", "S-502", "08:20", "09:20", 60, 10, 20, "scheduled", "Symptomatic cholelithiasis", "Pre-operative evaluation completed, booked for elective laparoscopic cholecystectomy.", "Hyoscine butylbromide 10mg PO PRN spasms"),
+        ("James Anderson", "Dr. Kevin O'Brien", "S-501", "11:00", "12:00", 60, 10, 0, "scheduled", "Right inguinal hernia", "Direct inguinal hernia identified, mesh repair discussed.", "Stool softener daily, avoid heavy lifting"),
+        ("Quinn Roberts", "Dr. Kevin O'Brien", "S-502", "12:15", "13:15", 60, 10, 15, "scheduled", "Sebaceous cyst excision", "Local anesthesia minor procedure booked.", "Chlorhexidine skin wash BID")
+    ]
+
+    for spec in appointments_today:
+        p_name, d_name, r_num, s_time, e_time, dur, buf, wait, status, notes, clin_notes, rx = spec
+        p = patients_map.get(p_name)
+        d = doctors_map.get(d_name)
+        r = rooms_map.get(r_num)
+        if p and d and r:
+            appt = Appointment(
+                patient_id=p.id,
+                doctor_id=d.id,
+                room_id=r.id,
+                date=today_str,
+                start_time=s_time,
+                end_time=e_time,
+                duration_minutes=dur,
+                buffer_minutes=buf,
+                waiting_time=wait,
+                status=status,
+                is_emergency=(p.priority == 'critical'),
+                notes=notes,
+                clinical_notes=clin_notes,
+                prescription=rx,
+                optimization_run_id=opt_run.id,
+                created_at=datetime.utcnow()
+            )
+            db.session.add(appt)
+
+    # 3. Add appointments for yesterday (for realistic analytics historical trends)
+    yesterday_specs = [
+        ("Alice Johnson", "Dr. Sarah Mitchell", "C-101", "08:00", "08:30", 30, 10, 0, "completed", "Pre-admission evaluation", "Cardiac baseline stable.", "Aspirin 81mg"),
+        ("Carol White", "Dr. Linda Park", "O-301", "09:00", "09:30", 30, 10, 5, "completed", "Initial orthopedic triage", "Knee joint effusion noted.", "Ice packs, rest"),
+        ("Noah Jackson", "Dr. Emily Chen", "N-201", "10:00", "10:45", 45, 10, 0, "completed", "Neurology consultation", "Mild transient ischemic symptoms.", "Neurology follow-up"),
+        ("Emma Davis", "Dr. Maria Santos", "S-501", "11:00", "12:00", 60, 10, 10, "completed", "Surgical triage", "RLQ tenderness confirmed.", "Surgical admission"),
+    ]
+    for spec in yesterday_specs:
+        p_name, d_name, r_num, s_time, e_time, dur, buf, wait, status, notes, clin_notes, rx = spec
+        p = patients_map.get(p_name)
+        d = doctors_map.get(d_name)
+        r = rooms_map.get(r_num)
+        if p and d and r:
+            appt = Appointment(
+                patient_id=p.id,
+                doctor_id=d.id,
+                room_id=r.id,
+                date=yesterday_str,
+                start_time=s_time,
+                end_time=e_time,
+                duration_minutes=dur,
+                buffer_minutes=buf,
+                waiting_time=wait,
+                status=status,
+                is_emergency=False,
+                notes=notes,
+                clinical_notes=clin_notes,
+                prescription=rx,
+                optimization_run_id=opt_run.id,
+                created_at=datetime.utcnow() - timedelta(days=1)
+            )
+            db.session.add(appt)
+
+    # 4. Add appointments for tomorrow
+    tomorrow_specs = [
+        ("Frank Wilson", "Dr. Sarah Mitchell", "C-101", "09:00", "09:30", 30, 10, 0, "scheduled", "Follow-up", "Holter monitor review.", ""),
+        ("Henry Clark", "Dr. Linda Park", "O-302", "10:00", "10:30", 30, 10, 0, "scheduled", "Cast check", "Check neurovascular status in splint.", ""),
+        ("David Brown", "Dr. Ahmed Al-Rashid", "P-401", "11:00", "11:30", 30, 10, 0, "scheduled", "Pediatric follow-up", "Post-bronchospasm review.", "")
+    ]
+    for spec in tomorrow_specs:
+        p_name, d_name, r_num, s_time, e_time, dur, buf, wait, status, notes, clin_notes, rx = spec
+        p = patients_map.get(p_name)
+        d = doctors_map.get(d_name)
+        r = rooms_map.get(r_num)
+        if p and d and r:
+            appt = Appointment(
+                patient_id=p.id,
+                doctor_id=d.id,
+                room_id=r.id,
+                date=tomorrow_str,
+                start_time=s_time,
+                end_time=e_time,
+                duration_minutes=dur,
+                buffer_minutes=buf,
+                waiting_time=wait,
+                status=status,
+                is_emergency=False,
+                notes=notes,
+                clinical_notes=clin_notes,
+                prescription=rx,
+                optimization_run_id=None,
+                created_at=datetime.utcnow()
+            )
+            db.session.add(appt)
+
+    db.session.commit()
+    print(f"[SEED] Seeded {len(appointments_today) + len(yesterday_specs) + len(tomorrow_specs)} appointments and 1 OptimizationRun successfully for {today_str}!")
+
+
+def seed_database():
+    """Seed comprehensive dataset if tables are empty or incomplete."""
+    # Always ensure permissions and system roles are synced first
+    roles_by_name = seed_permissions_and_roles()
+
+    # Seed base tables if empty
+    if Department.query.count() == 0:
+        seed_base_data(roles_by_name)
+
+    # Seed appointments and initial runs if appointments table is empty
+    if Appointment.query.count() == 0:
+        seed_appointments_and_runs()
