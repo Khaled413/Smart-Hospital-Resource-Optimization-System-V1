@@ -1,17 +1,38 @@
 """
 config.py - Application Configuration for Smart Hospital Resource Optimization System
+Compatible with local environments, Docker, and Vercel Serverless.
 """
 
 import os
+import shutil
+import tempfile
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
+# Detect if running in Vercel Serverless or AWS Lambda
+IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
+
+# Configure Database URL
+database_url = os.environ.get('DATABASE_URL')
+
+if database_url:
+    # Normalize legacy postgres:// to postgresql:// for modern SQLAlchemy
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+else:
+    if IS_VERCEL:
+        # In Vercel serverless functions, only temporary directory is writable
+        DEFAULT_DB_PATH = os.path.join(tempfile.gettempdir(), 'hospital.db')
+    else:
+        DEFAULT_DB_PATH = os.path.join(BASE_DIR, 'instance', 'hospital.db')
+    # Standardize forward slashes for SQLite URI
+    clean_path = DEFAULT_DB_PATH.replace('\\', '/')
+    database_url = f"sqlite:///{clean_path}"
+
+
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'smart-hospital-optimizer-key-2025-secure')
-    SQLALCHEMY_DATABASE_URI = os.environ.get(
-        'DATABASE_URL',
-        f"sqlite:///{os.path.join(BASE_DIR, 'instance', 'hospital.db')}"
-    )
+    SQLALCHEMY_DATABASE_URI = database_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     # Hospital Operational Parameters

@@ -52,19 +52,27 @@
   </div>
 </nav>
 
+<!-- Mobile Sidebar Backdrop -->
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleMobileSidebar()"></div>
+
 <!-- Main Content -->
 <div class="main-content">
   <!-- Top Header -->
   <header class="top-header">
-    <div>
-      <div class="page-title">{% block page_title %}Dashboard{% endblock %}</div>
-      <div class="page-subtitle">{% block page_subtitle %}Real-time hospital resource overview{% endblock %}</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="mobile-menu-toggle" id="mobile-toggle" onclick="toggleMobileSidebar()" aria-label="Toggle navigation">
+        ☰
+      </button>
+      <div>
+        <div class="page-title">{% block page_title %}Dashboard{% endblock %}</div>
+        <div class="page-subtitle">{% block page_subtitle %}Real-time hospital resource overview{% endblock %}</div>
+      </div>
     </div>
 
     <div class="header-actions">
       <!-- Emergency Code Red Fast Trigger -->
       <button class="btn btn-emergency" onclick="openEmergencyModal()">
-        🚨 <span data-i18n="btn_emergency">Code Red Walk-In</span>
+        🚨 <span class="hide-mobile-text" data-i18n="btn_emergency">Code Red Walk-In</span>
       </button>
 
       <!-- Language Toggle -->

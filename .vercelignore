@@ -1,0 +1,10 @@
+.git
+.gitignore
+.pytest_cache
+.hypothesis
+tests/
+*.pyc
+__pycache__/
+.env
+Dockerfile
+docker-compose.yml

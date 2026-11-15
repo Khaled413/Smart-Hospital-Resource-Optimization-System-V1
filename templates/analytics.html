@@ -56,10 +56,10 @@
 <script>
 const chartOpts = (extra = {}) => ({
   responsive: true, maintainAspectRatio: false,
-  plugins: { legend: { labels: { color: '#94a3b8', font: { family:'Inter', size:11 } } } },
+  plugins: { legend: { labels: { color: '#334155', font: { family:'Inter', size:11, weight:'600' } } } },
   scales: {
-    x: { ticks: { color: '#64748b', font:{size:10} }, grid: { color: 'rgba(255,255,255,0.05)' } },
-    y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+    x: { ticks: { color: '#64748b', font:{size:10} }, grid: { color: 'rgba(15, 23, 42, 0.06)' } },
+    y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(15, 23, 42, 0.06)' }, beginAtZero: true }
   },
   ...extra
 });
@@ -156,7 +156,7 @@ async function loadAnalytics() {
           {
             label: 'Max Capacity',
             data: utilData.map(d => d.total_slots),
-            backgroundColor: 'rgba(255,255,255,0.06)',
+            backgroundColor: '#e2e8f0',
             borderRadius: 6, borderWidth: 0
           }
         ]

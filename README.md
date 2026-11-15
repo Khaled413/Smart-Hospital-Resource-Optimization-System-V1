@@ -192,6 +192,21 @@ docker-compose up --build -d
 ```
 Access the application at `http://localhost:5000`.
 
+### ☁️ Vercel Serverless Deployment
+
+MediOptim Pro is pre-configured for instant zero-config deployment on **Vercel**:
+* **Optimized Serverless Package**: Pre-configured with `vercel.json`, `api/index.py`, `.vercelignore`, and lightweight serverless dependencies (<15MB).
+* **Automatic Database Provisioning**: In Vercel serverless environments, SQLite is automatically mapped to `/tmp/hospital.db` and copies seeded clinical records on cold-start, or connects to external PostgreSQL (e.g. Supabase, Neon) via `DATABASE_URL`.
+* **Fault-Tolerant Optimizer**: The LP optimization engine automatically handles cloud lambda constraints, falling back to fast heuristic scheduling if external solver binaries are unavailable in serverless containers.
+
+```bash
+# Deploy with Vercel CLI:
+npm install -g vercel
+vercel
+
+# Or simply import the repository into https://vercel.com/new
+```
+
 ---
 
 ## 🔑 Pre-Configured Demo Accounts
@@ -256,6 +271,10 @@ python -m pytest tests/test_system.py -v
 ```
 Smart-Hospital-Resource-Optimization-System-V1/
 ├── app.py                  # Main Flask application & 50+ RESTful API routes
+├── api/
+│   └── index.py            # Vercel Serverless WSGI entrypoint
+├── vercel.json             # Vercel cloud serverless routing & build config
+├── .vercelignore           # Deployment asset filter for fast cloud builds
 ├── models.py               # SQLAlchemy ORM models (Users, Beds, Equipment, etc.)
 ├── optimizer.py            # PuLP Linear Programming, Greedy & Code Red engine
 ├── config.py               # Environment configuration (Dev, Prod, Test)

@@ -29,14 +29,33 @@ app = Flask(__name__)
 env_name = os.environ.get('FLASK_ENV', 'dev')
 app.config.from_object(config_by_name.get(env_name, config_by_name['dev']))
 
-# Ensure instance folder exists
-os.makedirs(os.path.join(app.root_path, 'instance'), exist_ok=True)
+# Handle Vercel / Serverless database persistence & pre-seeding
+IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
+
+if IS_VERCEL:
+    import tempfile
+    import shutil
+    tmp_db = os.path.join(tempfile.gettempdir(), 'hospital.db')
+    repo_db = os.path.join(app.root_path, 'instance', 'hospital.db')
+    if os.path.exists(repo_db) and not os.path.exists(tmp_db):
+        try:
+            shutil.copy2(repo_db, tmp_db)
+        except Exception:
+            pass
+else:
+    try:
+        os.makedirs(os.path.join(app.root_path, 'instance'), exist_ok=True)
+    except Exception:
+        pass
 
 db.init_app(app)
 
 with app.app_context():
-    db.create_all()
-    seed_database()
+    try:
+        db.create_all()
+        seed_database()
+    except Exception as e:
+        print(f"Database initialization note: {e}")
 
 
 # ─── Auth & Security Helpers ──────────────────────────────────────────────────

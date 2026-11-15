@@ -182,9 +182,9 @@ function renderEquipment() {
             </div>
             <span class="badge" style="background:${sc.bg};color:${sc.text};border:1px solid ${sc.text}40">${sc.label}</span>
           </div>
-          ${e.notes ? `<div style="background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:4px;font-size:11px;color:var(--text-secondary);margin:8px 0">📝 ${e.notes}</div>` : ''}
+          ${e.notes ? `<div style="background:#f8fafc;border:1px solid #e2e8f0;padding:6px 8px;border-radius:6px;font-size:11px;color:var(--text-secondary);margin:8px 0">📝 ${e.notes}</div>` : ''}
         </div>
-        <div style="display:flex;gap:6px;margin-top:12px;border-top:1px solid rgba(255,255,255,0.06);padding-top:10px">
+        <div style="display:flex;gap:6px;margin-top:12px;border-top:1px solid #e2e8f0;padding-top:10px">
           ${e.status !== 'available' ? `
             <button class="btn btn-outline btn-sm w-full" onclick="changeStatus(${e.id}, 'available')">Mark Available</button>
           ` : ''}

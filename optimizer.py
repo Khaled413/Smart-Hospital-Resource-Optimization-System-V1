@@ -304,14 +304,17 @@ def run_lp(patients, doctors, rooms, target_date):
 
     # Solve
     log.append("[LP] Executing CBC solver (limit 25s)...")
-    solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=25)
-    prob.solve(solver)
+    try:
+        solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=25)
+        prob.solve(solver)
+        status_str = pulp.LpStatus.get(prob.status, 'Unknown')
+        log.append(f"[LP] Solver ended with status: {status_str}")
 
-    status_str = pulp.LpStatus[prob.status]
-    log.append(f"[LP] Solver ended with status: {status_str}")
-
-    if prob.status not in (1, -1):
-        log.append("[LP] Solver could not find optimal solution. Executing Greedy fallback.")
+        if prob.status not in (1, -1):
+            log.append("[LP] Solver could not find optimal solution. Executing Greedy fallback.")
+            return run_greedy(patients, doctors, rooms, target_date)
+    except Exception as e:
+        log.append(f"[LP Fallback] External CBC solver unavailable ({e}). Seamlessly switching to Dynamic Heuristic.")
         return run_greedy(patients, doctors, rooms, target_date)
 
     assignments = []

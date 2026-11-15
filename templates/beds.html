@@ -265,7 +265,7 @@ function renderBeds() {
           </div>
 
           ${b.patient_name ? `
-            <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;margin:8px 0;font-size:12px">
+            <div style="background:#f8fafc;padding:8px 10px;border-radius:6px;border:1px solid #e2e8f0;margin:8px 0;font-size:12px">
               <div style="font-weight:600;color:var(--text-primary)">👤 ${b.patient_name}</div>
               <div style="color:var(--text-muted);font-size:11px">Admitted: ${b.admission_date || '—'}</div>
               ${b.notes ? `<div style="color:var(--text-secondary);font-size:11px;margin-top:2px">📝 ${b.notes}</div>` : ''}
@@ -277,7 +277,7 @@ function renderBeds() {
           `}
         </div>
 
-        <div style="display:flex;gap:6px;margin-top:12px;border-top:1px solid rgba(255,255,255,0.06);padding-top:10px">
+        <div style="display:flex;gap:6px;margin-top:12px;border-top:1px solid #e2e8f0;padding-top:10px">
           ${b.status === 'vacant' ? `
             <button class="btn btn-primary btn-sm w-full" onclick="openAdmitModal(${b.id}, '${b.bed_number}', '${b.room_number}')">
               🏥 Admit Patient

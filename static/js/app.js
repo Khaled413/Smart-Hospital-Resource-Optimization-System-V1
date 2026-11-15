@@ -359,6 +359,18 @@ function toggleLanguage() {
   applyLanguage(next);
 }
 
+// ── Mobile Responsive Sidebar Drawer ─────────────────────────
+function toggleMobileSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  if (!sidebar) return;
+  const isOpen = sidebar.classList.toggle('mobile-open');
+  if (backdrop) {
+    if (isOpen) backdrop.classList.add('active');
+    else backdrop.classList.remove('active');
+  }
+}
+
 // ── Official Clinical Light Theme (Exclusively Enforced) ──────
 // Dark mode has been eliminated in favor of official Hospital Clinical Light
 function toggleTheme() {
@@ -376,6 +388,18 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   checkAuthStatus();
   applyLanguage(currentLang);
+
+  // Close mobile sidebar upon clicking navigation items
+  document.querySelectorAll('.sidebar .nav-item').forEach(link => {
+    link.addEventListener('click', () => {
+      if (window.innerWidth <= 992) {
+        const sidebar = document.getElementById('sidebar');
+        const backdrop = document.getElementById('sidebar-backdrop');
+        if (sidebar) sidebar.classList.remove('mobile-open');
+        if (backdrop) backdrop.classList.remove('active');
+      }
+    });
+  });
 
   const dateEl = document.getElementById('current-date');
   if (dateEl) {
