@@ -11,7 +11,7 @@ import io
 import os
 from functools import wraps
 
-from config import config_by_name
+from config import get_config, config_by_name
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment,
     Appointment, OptimizationRun, User, AuditLog
@@ -27,7 +27,7 @@ from seed_data import seed_database
 
 app = Flask(__name__)
 env_name = os.environ.get('FLASK_ENV', 'dev')
-app.config.from_object(config_by_name.get(env_name, config_by_name['dev']))
+app.config.from_object(get_config(env_name))
 
 # Handle Vercel / Serverless database persistence & pre-seeding
 IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
