@@ -4,7 +4,7 @@ Includes Authentication, RBAC, Bed Management, Equipment Tracking, Emergency Cod
 Crisis Simulation, Export, and Optimization Services.
 """
 
-from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response, send_from_directory
 from datetime import datetime, date
 import csv
 import io
@@ -56,6 +56,11 @@ with app.app_context():
         seed_database()
     except Exception as e:
         print(f"Database initialization note: {e}")
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static', 'img'), 'logo.png', mimetype='image/png')
 
 
 # ─── Auth & Security Helpers ──────────────────────────────────────────────────
