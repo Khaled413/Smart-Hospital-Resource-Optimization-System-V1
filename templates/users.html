@@ -1,0 +1,491 @@
+{% extends "base.html" %}
+{% block title %}Staff & Users — MediOptim Pro{% endblock %}
+{% block page_title %}Staff Accounts & Overrides{% endblock %}
+{% block page_subtitle %}Manage hospital personnel credentials, role assignments, and individual permission overrides{% endblock %}
+
+{% block header_actions %}
+{% if can('users.manage') %}
+<button class="btn btn-primary" onclick="openCreateUserModal()">
+  <span class="btn-icon">➕</span> Add Staff User
+</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="toolbar-left">
+    <div class="search-bar" style="min-width:280px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="user-search" placeholder="Search by name, username, or role..." oninput="filterUsers()">
+    </div>
+    <select class="form-control" id="role-filter" onchange="filterUsers()" style="width:auto;padding:8px 14px">
+      <option value="">All Roles / كافة الأدوار</option>
+    </select>
+  </div>
+  <div class="toolbar-right">
+    <span class="text-muted" id="user-count-label" style="font-size:13px"></span>
+  </div>
+</div>
+
+<!-- Users Table Card -->
+<div class="card" style="padding:0;overflow:hidden;box-shadow:var(--shadow-sm);border-radius:10px;">
+  <div class="table-container">
+    <table class="table" id="users-table">
+      <thead>
+        <tr>
+          <th>User / المستخدم</th>
+          <th>Role / الدور</th>
+          <th>Clinical Binding / الطبيب المقترن</th>
+          <th style="text-align:center">Account Status</th>
+          <th style="text-align:center">Custom Overrides</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        <tr>
+          <td colspan="6" style="text-align:center;padding:30px;color:var(--text-muted)">Loading staff directory...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create User Modal -->
+<div class="modal-overlay" id="user-create-modal">
+  <div class="modal" style="max-width:550px;">
+    <div class="modal-header">
+      <div class="modal-title">➕ Add New Staff Account</div>
+      <button class="modal-close" onclick="Modal.close('user-create-modal')">✕</button>
+    </div>
+    <form id="create-user-form" onsubmit="submitCreateUser(event)">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+        <div class="form-group">
+          <label class="form-label">Username *</label>
+          <input class="form-control" id="cu-username" placeholder="e.g. dr_ahmed" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Full Name *</label>
+          <input class="form-control" id="cu-fullname" placeholder="e.g. Dr. Ahmed Hassan" required>
+        </div>
+        <div class="form-group" style="grid-column:1/-1;">
+          <label class="form-label">Email Address *</label>
+          <input class="form-control" id="cu-email" type="email" placeholder="ahmed@hospital.org" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Assign Role *</label>
+          <select class="form-control" id="cu-role" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Link Physician Profile (Optional)</label>
+          <select class="form-control" id="cu-doctor">
+            <option value="">None (Non-Physician)</option>
+          </select>
+        </div>
+        <div class="form-group" style="grid-column:1/-1;">
+          <label class="form-label">Initial Password * (Min 8 characters)</label>
+          <input class="form-control" id="cu-password" type="password" placeholder="••••••••" minlength="8" required>
+        </div>
+      </div>
+
+      <!-- Step-up Admin Authentication Password -->
+      <div class="form-group" style="background:#f1f5f9;padding:12px;border-radius:8px;border:1px dashed #cbd5e1;margin-bottom:16px;">
+        <label class="form-label" style="color:#1e293b;font-weight:600;font-size:12px;">
+          🔐 Step-Up Auth: Confirm Administrator Password *
+        </label>
+        <input type="password" class="form-control" id="cu-admin-pass" placeholder="Enter current admin password" required>
+      </div>
+
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('user-create-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create User Account</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Change Role Modal -->
+<div class="modal-overlay" id="change-role-modal">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-header">
+      <div class="modal-title" id="cr-modal-title">🔄 Assign Role</div>
+      <button class="modal-close" onclick="Modal.close('change-role-modal')">✕</button>
+    </div>
+    <form id="change-role-form" onsubmit="submitChangeRole(event)">
+      <input type="hidden" id="cr-user-id">
+      <div class="form-group" style="margin-bottom:16px;">
+        <label class="form-label">Select New Security Role *</label>
+        <select class="form-control" id="cr-role-select" required></select>
+      </div>
+
+      <div class="form-group" style="background:#f1f5f9;padding:12px;border-radius:8px;border:1px dashed #cbd5e1;margin-bottom:16px;">
+        <label class="form-label" style="color:#1e293b;font-weight:600;font-size:12px;">
+          🔐 Step-Up Auth: Confirm Administrator Password *
+        </label>
+        <input type="password" class="form-control" id="cr-admin-pass" placeholder="Enter current admin password" required>
+      </div>
+
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('change-role-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Update Role</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Overrides Modal -->
+<div class="modal-overlay" id="overrides-modal">
+  <div class="modal" style="max-width:680px;">
+    <div class="modal-header">
+      <div class="modal-title" id="om-modal-title">⚙️ Individual Permission Overrides</div>
+      <button class="modal-close" onclick="Modal.close('overrides-modal')">✕</button>
+    </div>
+    <div style="padding:16px;overflow-y:auto;max-height:75vh;">
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Per-user overrides grant or deny specific permissions independently of the user's role.
+        <strong style="color:#b91c1c;">Deny overrides always take absolute precedence.</strong>
+      </div>
+
+      <!-- Active Overrides Table -->
+      <div class="table-container" style="margin-bottom:20px;border:1px solid #e2e8f0;border-radius:8px;">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Effect</th>
+              <th>Permission Key</th>
+              <th>Reason</th>
+              <th>Author</th>
+              <th style="text-align:right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="om-overrides-tbody">
+            <tr><td colspan="5" style="text-align:center;padding:14px;color:var(--text-muted);">No active overrides.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Add Override Form -->
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:14px;border-radius:8px;">
+        <h4 style="margin:0 0 10px 0;font-size:14px;color:#0f172a;">➕ Add User Exception</h4>
+        <form id="add-override-form" onsubmit="submitAddOverride(event)">
+          <input type="hidden" id="om-user-id">
+          <div class="form-grid" style="grid-template-columns:1fr 140px;gap:10px;margin-bottom:10px;">
+            <div class="form-group">
+              <label class="form-label">Permission Key *</label>
+              <select class="form-control" id="om-perm-select" required></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Effect *</label>
+              <select class="form-control" id="om-effect-select" required>
+                <option value="grant">GRANT (منح)</option>
+                <option value="deny">DENY (حظر)</option>
+              </select>
+            </div>
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Business / Clinical Reason *</label>
+              <input class="form-control" id="om-reason" placeholder="e.g. Temporary on-call coverage for emergency department" required>
+            </div>
+            <div class="form-group" style="grid-column:1/-1;">
+              <label class="form-label">Admin Password Confirm *</label>
+              <input type="password" class="form-control" id="om-admin-pass" placeholder="Enter admin password to authorize" required>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;">
+            <button type="submit" class="btn btn-primary btn-sm">💾 Apply Override Exception</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allUsers = [];
+let allRoles = [];
+let allDoctors = [];
+let allPermissions = [];
+
+async function loadUsersData() {
+  try {
+    const [uRes, rRes] = await Promise.all([
+      API.get('/api/users'),
+      API.get('/api/roles')
+    ]);
+
+    allUsers = uRes.users || [];
+    allRoles = uRes.roles || [];
+    allDoctors = uRes.doctors || [];
+    allPermissions = rRes.catalog || [];
+
+    populateFilterOptions();
+    renderUsers(allUsers);
+  } catch (err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+function populateFilterOptions() {
+  const rFilter = document.getElementById('role-filter');
+  const cuRole = document.getElementById('cu-role');
+  const crRole = document.getElementById('cr-role-select');
+  const cuDoc = document.getElementById('cu-doctor');
+  const omPerm = document.getElementById('om-perm-select');
+
+  rFilter.innerHTML = '<option value="">All Roles / كافة الأدوار</option>' +
+    allRoles.map(r => `<option value="${r.name}">${r.name}</option>`).join('');
+
+  cuRole.innerHTML = allRoles.map(r => `<option value="${r.id}">${r.name} ${r.is_locked ? '(Admin)' : ''}</option>`).join('');
+  crRole.innerHTML = allRoles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+
+  cuDoc.innerHTML = '<option value="">None (Non-Physician)</option>' +
+    allDoctors.map(d => `<option value="${d.id}">${d.name} (${d.specialization})</option>`).join('');
+
+  omPerm.innerHTML = allPermissions.map(p =>
+    `<option value="${p.key}">${p.key} — ${p.label_en}</option>`
+  ).join('');
+}
+
+function renderUsers(users) {
+  const tbody = document.getElementById('users-tbody');
+  const countLabel = document.getElementById('user-count-label');
+  countLabel.textContent = `${users.length} Users Registered`;
+
+  if (!users.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-muted)">No users found matching query.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = users.map(u => {
+    const statusBadge = u.is_active
+      ? '<span class="badge" style="background:#dcfce7;color:#15803d;font-weight:600;">Active / مفعل</span>'
+      : '<span class="badge" style="background:#fee2e2;color:#b91c1c;font-weight:600;">Disabled / معطل</span>';
+
+    const overridesCount = (u.overrides || []).length;
+    const overridesBadge = overridesCount > 0
+      ? `<span class="badge" style="background:#fef3c7;color:#b45309;font-weight:600;">⚡ ${overridesCount} Override(s)</span>`
+      : '<span style="color:var(--text-muted);font-size:12px;">Standard</span>';
+
+    const docObj = allDoctors.find(d => d.id === u.doctor_id);
+    const doctorLabel = docObj ? `👨‍⚕️ ${docObj.name}` : '<span style="color:var(--text-muted);">—</span>';
+
+    return `
+      <tr>
+        <td>
+          <div style="font-weight:600;color:var(--text-primary);">${u.full_name}</div>
+          <div style="color:var(--text-muted);font-size:12px;">@${u.username} • ${u.email}</div>
+        </td>
+        <td>
+          <span class="badge" style="background:#1e40af;color:#fff;font-weight:600;">${u.role.toUpperCase()}</span>
+        </td>
+        <td>${doctorLabel}</td>
+        <td style="text-align:center">${statusBadge}</td>
+        <td style="text-align:center">${overridesBadge}</td>
+        <td style="text-align:right">
+          <div style="display:flex;gap:6px;justify-content:flex-end">
+            <button class="btn btn-outline btn-sm" onclick="openChangeRoleModal(${u.id}, '${u.username}', ${u.role_id})" title="Change Role" style="padding:4px 8px;font-size:12px;">
+              🔄 Role
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="openOverridesModal(${u.id})" title="Manage Overrides" style="padding:4px 8px;font-size:12px;">
+              ⚡ Overrides
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="toggleUserStatus(${u.id}, ${u.is_active})" style="padding:4px 8px;font-size:12px;color:${u.is_active ? '#ef4444' : '#10b981'};">
+              ${u.is_active ? 'Disable' : 'Enable'}
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterUsers() {
+  const q = document.getElementById('user-search').value.toLowerCase().trim();
+  const rVal = document.getElementById('role-filter').value;
+
+  const filtered = allUsers.filter(u => {
+    const matchQuery = u.username.toLowerCase().includes(q) ||
+      u.full_name.toLowerCase().includes(q) ||
+      u.email.toLowerCase().includes(q);
+    const matchRole = !rVal || u.role === rVal;
+    return matchQuery && matchRole;
+  });
+  renderUsers(filtered);
+}
+
+function openCreateUserModal() {
+  document.getElementById('cu-username').value = '';
+  document.getElementById('cu-fullname').value = '';
+  document.getElementById('cu-email').value = '';
+  document.getElementById('cu-password').value = '';
+  document.getElementById('cu-admin-pass').value = '';
+  Modal.open('user-create-modal');
+}
+
+async function submitCreateUser(e) {
+  e.preventDefault();
+  const payload = {
+    username: document.getElementById('cu-username').value.trim(),
+    full_name: document.getElementById('cu-fullname').value.trim(),
+    email: document.getElementById('cu-email').value.trim(),
+    role_id: parseInt(document.getElementById('cu-role').value),
+    doctor_id: document.getElementById('cu-doctor').value ? parseInt(document.getElementById('cu-doctor').value) : null,
+    password: document.getElementById('cu-password').value,
+    admin_password: document.getElementById('cu-admin-pass').value
+  };
+
+  try {
+    await API.post('/api/users', payload);
+    Modal.close('user-create-modal');
+    ToastManager.show(`Staff account @${payload.username} created successfully!`, 'success');
+    loadUsersData();
+  } catch (err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+function openChangeRoleModal(userId, username, roleId) {
+  document.getElementById('cr-user-id').value = userId;
+  document.getElementById('cr-modal-title').textContent = `🔄 Assign Role to @${username}`;
+  document.getElementById('cr-role-select').value = roleId || allRoles[0].id;
+  document.getElementById('cr-admin-pass').value = '';
+  Modal.open('change-role-modal');
+}
+
+async function submitChangeRole(e) {
+  e.preventDefault();
+  const userId = document.getElementById('cr-user-id').value;
+  const newRoleId = parseInt(document.getElementById('cr-role-select').value);
+  const adminPass = document.getElementById('cr-admin-pass').value;
+
+  try {
+    await API.put(`/api/users/${userId}/role`, {
+      role_id: newRoleId,
+      admin_password: adminPass
+    });
+    Modal.close('change-role-modal');
+    ToastManager.show('Role updated! User permissions synchronized immediately.', 'success');
+    loadUsersData();
+  } catch (err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+async function toggleUserStatus(userId, currentActive) {
+  const actionText = currentActive ? 'deactivate' : 'activate';
+  if (!confirm(`Are you sure you want to ${actionText} this user account?`)) return;
+
+  const adminPass = prompt('Enter your administrator password to authorize:');
+  if (!adminPass) return;
+
+  try {
+    await API.patch(`/api/users/${userId}/status`, {
+      is_active: !currentActive,
+      admin_password: adminPass
+    });
+    ToastManager.show(`Account status updated to ${!currentActive ? 'Active' : 'Disabled'}`, 'success');
+    loadUsersData();
+  } catch (err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+let activeOverrideUserId = null;
+
+function openOverridesModal(userId) {
+  activeOverrideUserId = userId;
+  const user = allUsers.find(u => u.id === userId);
+  if (!user) return;
+
+  document.getElementById('om-user-id').value = userId;
+  document.getElementById('om-modal-title').textContent = `⚡ Security Overrides for ${user.full_name} (@${user.username})`;
+  document.getElementById('om-reason').value = '';
+  document.getElementById('om-admin-pass').value = '';
+
+  renderOverridesList(user);
+  Modal.open('overrides-modal');
+}
+
+function renderOverridesList(user) {
+  const tbody = document.getElementById('om-overrides-tbody');
+  const overrides = user.overrides || [];
+
+  if (!overrides.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:14px;color:var(--text-muted);">No overrides configured for this account.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = overrides.map(ovr => {
+    const effectBadge = ovr.effect === 'grant'
+      ? '<span class="badge" style="background:#dcfce7;color:#15803d;font-weight:700;">+ GRANT</span>'
+      : '<span class="badge" style="background:#fee2e2;color:#b91c1c;font-weight:700;">- DENY</span>';
+
+    return `
+      <tr>
+        <td>${effectBadge}</td>
+        <td><code>${ovr.permission_key}</code></td>
+        <td style="font-size:12px;color:var(--text-muted);">${ovr.reason}</td>
+        <td style="font-size:11px;color:var(--text-muted);">${ovr.created_by}</td>
+        <td style="text-align:right">
+          <button class="btn btn-outline btn-sm" onclick="deleteOverride(${user.id}, ${ovr.permission_id}, '${ovr.permission_key}')" style="padding:2px 8px;font-size:11px;color:#ef4444;">
+            ✕ Remove
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function submitAddOverride(e) {
+  e.preventDefault();
+  const userId = activeOverrideUserId;
+  const payload = {
+    permission_key: document.getElementById('om-perm-select').value,
+    effect: document.getElementById('om-effect-select').value,
+    reason: document.getElementById('om-reason').value.trim(),
+    admin_password: document.getElementById('om-admin-pass').value
+  };
+
+  try {
+    await API.post(`/api/users/${userId}/overrides`, payload);
+    ToastManager.show(`Override ${payload.effect.toUpperCase()} applied!`, 'success');
+    await loadUsersData();
+    const updatedUser = allUsers.find(u => u.id === userId);
+    if (updatedUser) renderOverridesList(updatedUser);
+    document.getElementById('om-reason').value = '';
+    document.getElementById('om-admin-pass').value = '';
+  } catch (err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+async function deleteOverride(userId, permId, permKey) {
+  if (!confirm(`Remove override for ${permKey}?`)) return;
+  const adminPass = prompt('Enter administrator password to authorize:');
+  if (!adminPass) return;
+
+  try {
+    const res = await fetch(`/api/users/${userId}/overrides/${permId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': getCsrfToken(),
+        'X-Admin-Password': adminPass
+      }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || err.error || 'Failed to remove override');
+    }
+    ToastManager.show(`Override for ${permKey} removed!`, 'success');
+    await loadUsersData();
+    const updatedUser = allUsers.find(u => u.id === userId);
+    if (updatedUser) renderOverridesList(updatedUser);
+  } catch (err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadUsersData);
+</script>
+{% endblock %}
