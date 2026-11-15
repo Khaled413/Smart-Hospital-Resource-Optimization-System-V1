@@ -82,6 +82,19 @@ db.init_app(app)
 
 with app.app_context():
     try:
+        # Lightweight schema migration for SQLite columns
+        try:
+            with db.engine.connect() as conn:
+                res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
+                cols = [r[1] for r in res]
+                if cols:
+                    if 'role_id' not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN role_id INTEGER REFERENCES roles(id)"))
+                    if 'permissions_version' not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN permissions_version INTEGER DEFAULT 1"))
+                    conn.commit()
+        except Exception:
+            pass
         db.create_all()
         seed_database()
     except Exception as e:
@@ -1177,8 +1190,11 @@ def api_optimize():
     ]
 
     if not patients_to_schedule:
-        # When no patients specifically requested target_date, use all remaining unscheduled patients
-        patients_to_schedule = unscheduled_patients
+        return jsonify({
+            'status': 'warning',
+            'message': f'No eligible unscheduled patients available for {target_date}.',
+            'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0}
+        })
 
     try:
         with db.session.begin_nested():
@@ -1249,8 +1265,9 @@ def api_optimize():
         for p in result['unassigned']
     ]
 
+    run_status = 'success' if result['metrics']['assigned'] > 0 else 'warning'
     return jsonify({
-        'status': 'success',
+        'status': run_status,
         'run_id': run.id,
         'algorithm': algorithm,
         'algorithm_used': run.algorithm_used,

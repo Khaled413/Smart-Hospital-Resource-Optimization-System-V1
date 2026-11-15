@@ -10,6 +10,107 @@ from werkzeug.security import generate_password_hash, check_password_hash
 db = SQLAlchemy()
 
 
+# ─── Dynamic RBAC Models ───────────────────────────────────────────────────────
+
+# Association table for Role <-> Permission Many-to-Many
+role_permissions = db.Table(
+    'role_permissions',
+    db.Column('role_id', db.Integer, db.ForeignKey('roles.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('permission_id', db.Integer, db.ForeignKey('permissions.id', ondelete='CASCADE'), primary_key=True)
+)
+
+
+class Permission(db.Model):
+    """Authoritative Permission registry entry stored in DB"""
+    __tablename__ = 'permissions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    group = db.Column(db.String(50), nullable=False, index=True)
+    label_en = db.Column(db.String(120), nullable=False)
+    label_ar = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, default='')
+    is_sensitive = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'key': self.key,
+            'group': self.group,
+            'label_en': self.label_en,
+            'label_ar': self.label_ar,
+            'description': self.description,
+            'is_sensitive': self.is_sensitive
+        }
+
+
+class Role(db.Model):
+    """Dynamic Role with assigned permissions and lock guards"""
+    __tablename__ = 'roles'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(255), default='')
+    is_system = db.Column(db.Boolean, default=False, nullable=False)  # System roles cannot be deleted
+    is_locked = db.Column(db.Boolean, default=False, nullable=False)  # Admin role is locked: permissions immutable
+    version = db.Column(db.Integer, default=1, nullable=False)        # Incremented on permission edit for cache busting
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    permissions = db.relationship('Permission', secondary=role_permissions, backref=db.backref('roles', lazy='dynamic'), lazy='joined')
+    users = db.relationship('User', backref='assigned_role', lazy='select')
+
+    def to_dict(self, include_permissions=True):
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'is_system': self.is_system,
+            'is_locked': self.is_locked,
+            'version': self.version,
+            'users_count': len(self.users),
+            'permissions_count': len(self.permissions),
+            'created_at': self.created_at.isoformat() if self.created_at else '',
+            'updated_at': self.updated_at.isoformat() if self.updated_at else ''
+        }
+        if include_permissions:
+            data['permissions'] = [p.key for p in self.permissions]
+        return data
+
+
+class UserPermissionOverride(db.Model):
+    """Per-user permission override (explicit grant or deny)"""
+    __tablename__ = 'user_permission_overrides'
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'permission_id', name='uq_user_permission_override'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    permission_id = db.Column(db.Integer, db.ForeignKey('permissions.id', ondelete='CASCADE'), nullable=False)
+    effect = db.Column(db.String(10), nullable=False)  # 'grant' or 'deny'
+    reason = db.Column(db.String(255), nullable=False)
+    created_by = db.Column(db.String(80), default='admin')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationship
+    permission = db.relationship('Permission', lazy='joined')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'permission_id': self.permission_id,
+            'permission_key': self.permission.key if self.permission else None,
+            'effect': self.effect,
+            'reason': self.reason,
+            'created_by': self.created_by,
+            'created_at': self.created_at.isoformat() if self.created_at else ''
+        }
+
+
 # ─── User & Authentication Model ──────────────────────────────────────────────
 
 class User(db.Model):
@@ -20,16 +121,19 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(30), default='receptionist')  # admin, doctor, receptionist, manager
+    role = db.Column(db.String(30), default='receptionist')  # Legacy string fallback
+    role_id = db.Column(db.Integer, db.ForeignKey('roles.id'), nullable=True)
     full_name = db.Column(db.String(150), default='')
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctors.id'), nullable=True)
     must_change_password = db.Column(db.Boolean, default=False, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     failed_login_attempts = db.Column(db.Integer, default=0, nullable=False)
     locked_until = db.Column(db.DateTime, nullable=True)
+    permissions_version = db.Column(db.Integer, default=1, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     doctor = db.relationship('Doctor', backref=db.backref('user_account', uselist=False))
+    permission_overrides = db.relationship('UserPermissionOverride', backref='user', cascade='all, delete-orphan', lazy='joined')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -37,17 +141,55 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-    def to_dict(self):
-        return {
+    def get_role_name(self) -> str:
+        """Return role name from assigned_role relationship or fallback to role column."""
+        if self.assigned_role:
+            return self.assigned_role.name
+        return self.role or 'receptionist'
+
+    def get_effective_permissions(self) -> set:
+        """
+        Compute effective permissions dynamically:
+        Effective = (Role Permissions ∪ User Grants) - User Denies.
+        Deny always takes absolute precedence.
+        """
+        perms = set()
+        if self.assigned_role and self.assigned_role.permissions:
+            perms = {p.key for p in self.assigned_role.permissions}
+
+        # Apply user overrides
+        for ovr in self.permission_overrides:
+            if ovr.permission:
+                if ovr.effect == 'grant':
+                    perms.add(ovr.permission.key)
+                elif ovr.effect == 'deny':
+                    perms.discard(ovr.permission.key)
+        return perms
+
+    def has_permission(self, perm_key: str) -> bool:
+        """Check if user holds an active permission."""
+        if not self.is_active:
+            return False
+        return perm_key in self.get_effective_permissions()
+
+    def to_dict(self, include_permissions=False):
+        effective_role = self.get_role_name()
+        data = {
             'id': self.id,
             'username': self.username,
             'email': self.email,
-            'role': self.role,
+            'role': effective_role,
+            'role_id': self.role_id,
             'full_name': self.full_name or self.username,
             'doctor_id': self.doctor_id,
             'is_active': self.is_active,
-            'must_change_password': self.must_change_password
+            'must_change_password': self.must_change_password,
+            'permissions_version': self.permissions_version
         }
+        if include_permissions:
+            data['permissions'] = sorted(list(self.get_effective_permissions()))
+            data['overrides'] = [ovr.to_dict() for ovr in self.permission_overrides]
+        return data
 
 
 # ─── Department Model ─────────────────────────────────────────────────────────

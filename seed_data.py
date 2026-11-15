@@ -1,15 +1,118 @@
 """
 seed_data.py - Enhanced Sample Data Seeder for Smart Hospital Resource Optimization System
-Seeds Users (RBAC), Departments, Doctors, Rooms, Beds, Equipment, and Patients with clinical vitals.
+Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Beds, Equipment, and Patients with clinical vitals.
 """
 
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, User, Appointment
+from models import db, Department, Doctor, Patient, Room, Bed, Equipment, User, Appointment, Permission, Role, UserPermissionOverride
+from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
 from datetime import datetime, date
+import os
+import secrets
+
+
+def seed_permissions_and_roles():
+    """
+    Idempotent seeding of authoritative permissions and system roles.
+    - Synchronizes Permission table with PERMISSION_CATALOG.
+    - Ensures core system roles exist (admin, manager, doctor, receptionist, demo_viewer).
+    - Preserves custom permissions of unlocked roles.
+    - Always enforces full permissions on locked system roles (admin).
+    - Backfills role_id for existing users.
+    """
+    # 1. Sync Permissions Catalog
+    for p_def in PERMISSION_CATALOG:
+        perm = Permission.query.filter_by(key=p_def.key).first()
+        if not perm:
+            perm = Permission(
+                key=p_def.key,
+                group=p_def.group,
+                label_en=p_def.label_en,
+                label_ar=p_def.label_ar,
+                description=p_def.description,
+                is_sensitive=p_def.is_sensitive
+            )
+            db.session.add(perm)
+        else:
+            perm.group = p_def.group
+            perm.label_en = p_def.label_en
+            perm.label_ar = p_def.label_ar
+            perm.description = p_def.description
+            perm.is_sensitive = p_def.is_sensitive
+    db.session.flush()
+
+    all_perms = {p.key: p for p in Permission.query.all()}
+
+    # 2. Sync System Roles
+    system_roles_meta = {
+        'admin': {
+            'description': 'Chief Administrator with full access to all system modules and security controls',
+            'is_system': True,
+            'is_locked': True
+        },
+        'manager': {
+            'description': 'Operations Manager overseeing departmental resources, schedules, and analytics',
+            'is_system': True,
+            'is_locked': False
+        },
+        'doctor': {
+            'description': 'Attending Physician managing clinical consultations, patients, and diagnoses',
+            'is_system': True,
+            'is_locked': False
+        },
+        'receptionist': {
+            'description': 'Front Desk Receptionist managing patient intake, appointments, and triage',
+            'is_system': True,
+            'is_locked': False
+        },
+        'demo_viewer': {
+            'description': 'Public Demo Guest with read-only views and masked clinical details',
+            'is_system': True,
+            'is_locked': False
+        }
+    }
+
+    roles_by_name = {}
+    for role_name, meta in system_roles_meta.items():
+        role = Role.query.filter_by(name=role_name).first()
+        default_keys = DEFAULT_ROLE_PERMISSIONS.get(role_name, [])
+        target_perms = [all_perms[k] for k in default_keys if k in all_perms]
+
+        if not role:
+            role = Role(
+                name=role_name,
+                description=meta['description'],
+                is_system=meta['is_system'],
+                is_locked=meta['is_locked'],
+                version=1
+            )
+            role.permissions = target_perms
+            db.session.add(role)
+        else:
+            role.is_system = meta['is_system']
+            if role.is_locked:
+                role.permissions = target_perms
+        db.session.flush()
+        roles_by_name[role_name] = role
+
+    # 3. Backfill User role_id
+    for user in User.query.all():
+        if not user.role_id or not user.assigned_role:
+            role_key = (user.role or 'receptionist').strip().lower()
+            if role_key in roles_by_name:
+                user.role_id = roles_by_name[role_key].id
+            elif 'receptionist' in roles_by_name:
+                user.role_id = roles_by_name['receptionist'].id
+
+    db.session.commit()
+    return roles_by_name
 
 
 def seed_database():
     """Seed comprehensive dataset if tables are empty."""
+    # Always ensure permissions and system roles are synced first
+    roles_by_name = seed_permissions_and_roles()
+
     # Check if database needs seeding
     if Department.query.count() > 0:
         return
@@ -123,10 +226,12 @@ def seed_database():
             "must_change": False
         })
     for u in users_data:
+        r_obj = roles_by_name.get(u["role"])
         user = User(
             username=u["username"],
             email=u["email"],
             role=u["role"],
+            role_id=r_obj.id if r_obj else None,
             full_name=u["name"],
             doctor_id=u.get("doc_id"),
             must_change_password=u.get("must_change", False)

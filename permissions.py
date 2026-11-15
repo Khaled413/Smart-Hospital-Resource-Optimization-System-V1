@@ -425,6 +425,67 @@ PERMISSION_CATALOG: List[PermissionDefinition] = [
 # Lookup dictionary by key
 PERMISSION_MAP: Dict[str, PermissionDefinition] = {p.key: p for p in PERMISSION_CATALOG}
 
+# Default system role permission allocations
+DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
+    'admin': [p.key for p in PERMISSION_CATALOG],
+    'manager': [
+        'dashboard.view',
+        'patients.view', 'patients.view_all', 'patients.create', 'patients.update',
+        'doctors.view', 'doctors.manage',
+        'rooms.view', 'rooms.manage',
+        'departments.view', 'departments.manage',
+        'beds.view', 'beds.manage', 'beds.admit_discharge',
+        'equipment.view', 'equipment.manage',
+        'appointments.view', 'appointments.view_all', 'appointments.update_status', 'appointments.cancel',
+        'optimization.run', 'optimization.history.view',
+        'simulation.run',
+        'emergency.trigger',
+        'analytics.view',
+        'queue_display.view',
+        'export.csv',
+        'audit.view',
+        'users.view',
+        'roles.view'
+    ],
+    'doctor': [
+        'dashboard.view',
+        'patients.view', 'patients.view_clinical', 'patients.create', 'patients.update',
+        'doctors.view',
+        'rooms.view',
+        'departments.view',
+        'beds.view', 'beds.admit_discharge',
+        'equipment.view',
+        'appointments.view', 'appointments.update_status', 'appointments.edit_clinical_notes',
+        'emergency.trigger',
+        'analytics.view',
+        'queue_display.view'
+    ],
+    'receptionist': [
+        'dashboard.view',
+        'patients.view', 'patients.view_all', 'patients.create', 'patients.update',
+        'doctors.view',
+        'rooms.view',
+        'departments.view',
+        'beds.view',
+        'appointments.view', 'appointments.view_all', 'appointments.cancel', 'appointments.update_status',
+        'emergency.trigger',
+        'queue_display.view'
+    ],
+    'demo_viewer': [
+        'dashboard.view',
+        'patients.view', 'patients.view_all',
+        'doctors.view',
+        'rooms.view',
+        'departments.view',
+        'beds.view',
+        'equipment.view',
+        'appointments.view', 'appointments.view_all',
+        'optimization.history.view',
+        'analytics.view',
+        'queue_display.view'
+    ]
+}
+
 
 def get_permission(key: str) -> Optional[PermissionDefinition]:
     """Retrieve permission definition by key."""
