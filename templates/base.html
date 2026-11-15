@@ -6,6 +6,7 @@
   <title>{% block title %}Smart Hospital Optimizer — MediOptim Pro{% endblock %}</title>
   <meta name="description" content="Smart Hospital Resource Optimization System - AI-powered scheduling, beds, equipment & emergency preemption">
   <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" type="image/png" href="/static/img/logo.png">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   {% block extra_head %}{% endblock %}
 </head>
@@ -14,7 +15,9 @@
 <!-- Sidebar -->
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-logo">
-    <div class="logo-icon">🏥</div>
+    <div class="logo-icon">
+      <img src="/static/img/logo.png" alt="MediOptim Pro Logo" class="logo-img">
+    </div>
     <div class="logo-text">
       <span class="app-name">MediOptim Pro</span>
       <span class="app-sub" data-i18n="app_sub">Smart Hospital System</span>
@@ -62,11 +65,6 @@
       <!-- Emergency Code Red Fast Trigger -->
       <button class="btn btn-emergency" onclick="openEmergencyModal()">
         🚨 <span data-i18n="btn_emergency">Code Red Walk-In</span>
-      </button>
-
-      <!-- Theme Toggle (Clinical Light / Dark) -->
-      <button class="btn btn-outline btn-sm" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Hospital Light / Dark Theme">
-        <span id="theme-icon">☀️</span>
       </button>
 
       <!-- Language Toggle -->

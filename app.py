@@ -56,7 +56,7 @@ def safe_float(val, default=0.0):
 def get_current_user():
     user_id = session.get('user_id')
     if user_id:
-        return User.query.get(user_id)
+        return db.session.get(User, user_id)
     return None
 
 
@@ -308,7 +308,7 @@ def api_add_patient():
 
 @app.route('/api/patients/<int:pid>', methods=['PUT'])
 def api_update_patient(pid):
-    patient = Patient.query.get_or_404(pid)
+    patient = db.get_or_404(Patient, pid)
     data = request.get_json() or {}
     for field in ['name', 'age', 'gender', 'priority', 'required_specialization',
                   'condition_description', 'preferred_date', 'triage_level',
@@ -325,7 +325,7 @@ def api_update_patient(pid):
 
 @app.route('/api/patients/<int:pid>', methods=['DELETE'])
 def api_delete_patient(pid):
-    patient = Patient.query.get_or_404(pid)
+    patient = db.get_or_404(Patient, pid)
     name = patient.name
     Appointment.query.filter_by(patient_id=pid).delete()
     # Unlink any bed
@@ -368,7 +368,7 @@ def api_add_doctor():
 
 @app.route('/api/doctors/<int:did>', methods=['PUT'])
 def api_update_doctor(did):
-    doctor = Doctor.query.get_or_404(did)
+    doctor = db.get_or_404(Doctor, did)
     data = request.get_json() or {}
     for field in ['name', 'specialization', 'department_id', 'max_patients_per_day',
                   'available_from', 'available_until']:
@@ -381,7 +381,7 @@ def api_update_doctor(did):
 
 @app.route('/api/doctors/<int:did>', methods=['DELETE'])
 def api_delete_doctor(did):
-    doctor = Doctor.query.get_or_404(did)
+    doctor = db.get_or_404(Doctor, did)
     name = doctor.name
     Appointment.query.filter_by(doctor_id=did).delete()
     db.session.delete(doctor)
@@ -418,7 +418,7 @@ def api_add_room():
 
 @app.route('/api/rooms/<int:rid>', methods=['PUT'])
 def api_update_room(rid):
-    room = Room.query.get_or_404(rid)
+    room = db.get_or_404(Room, rid)
     data = request.get_json() or {}
     for field in ['room_number', 'department_id', 'room_type', 'capacity', 'status']:
         if field in data:
@@ -430,7 +430,7 @@ def api_update_room(rid):
 
 @app.route('/api/rooms/<int:rid>', methods=['DELETE'])
 def api_delete_room(rid):
-    room = Room.query.get_or_404(rid)
+    room = db.get_or_404(Room, rid)
     number = room.room_number
     Appointment.query.filter_by(room_id=rid).delete()
     Bed.query.filter_by(room_id=rid).delete()
@@ -490,7 +490,7 @@ def api_add_bed():
 
 @app.route('/api/beds/<int:bid>/status', methods=['PATCH'])
 def api_update_bed_status(bid):
-    bed = Bed.query.get_or_404(bid)
+    bed = db.get_or_404(Bed, bid)
     data = request.get_json() or {}
     new_status = data.get('status')
     if new_status not in ('vacant', 'occupied', 'cleaning', 'reserved'):
@@ -507,10 +507,10 @@ def api_update_bed_status(bid):
 
 @app.route('/api/beds/<int:bid>/admit', methods=['POST'])
 def api_admit_patient_to_bed(bid):
-    bed = Bed.query.get_or_404(bid)
+    bed = db.get_or_404(Bed, bid)
     data = request.get_json() or {}
     patient_id = data.get('patient_id')
-    patient = Patient.query.get_or_404(patient_id)
+    patient = db.get_or_404(Patient, patient_id)
 
     bed.patient_id = patient.id
     bed.status = 'occupied'
@@ -525,7 +525,7 @@ def api_admit_patient_to_bed(bid):
 
 @app.route('/api/beds/<int:bid>/discharge', methods=['POST'])
 def api_discharge_patient_from_bed(bid):
-    bed = Bed.query.get_or_404(bid)
+    bed = db.get_or_404(Bed, bid)
     patient_name = bed.patient.name if bed.patient else 'Patient'
     bed.patient_id = None
     bed.status = 'cleaning'  # Moves to cleaning first before vacant
@@ -564,7 +564,7 @@ def api_add_equipment():
 
 @app.route('/api/equipment/<int:eid>/status', methods=['PATCH'])
 def api_update_equipment_status(eid):
-    eq = Equipment.query.get_or_404(eid)
+    eq = db.get_or_404(Equipment, eid)
     data = request.get_json() or {}
     new_status = data.get('status')
     if new_status not in ('available', 'in_use', 'maintenance'):
@@ -591,7 +591,7 @@ def api_appointments():
 
 @app.route('/api/appointments/<int:aid>/status', methods=['PATCH'])
 def api_update_appointment_status(aid):
-    appt = Appointment.query.get_or_404(aid)
+    appt = db.get_or_404(Appointment, aid)
     data = request.get_json() or {}
     new_status = data.get('status')
     if new_status not in ('scheduled', 'in_progress', 'completed', 'cancelled', 'no_show'):
@@ -675,7 +675,7 @@ def api_emergency_walkin():
     bumped_msg = None
     if res['action'] == 'preempted':
         bumped_id = res['bumped_appointment_id']
-        bumped_appt = Appointment.query.get(bumped_id)
+        bumped_appt = db.session.get(Appointment, bumped_id)
         if bumped_appt:
             # Shift bumped appointment later
             new_start_min = time_to_minutes(assign['end_time']) + 10

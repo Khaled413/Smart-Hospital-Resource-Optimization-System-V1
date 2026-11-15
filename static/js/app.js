@@ -359,21 +359,14 @@ function toggleLanguage() {
   applyLanguage(next);
 }
 
-// ── Theme Switcher (Clinical Light / Dark) ───────────────────
+// ── Official Clinical Light Theme (Exclusively Enforced) ──────
+// Dark mode has been eliminated in favor of official Hospital Clinical Light
 function toggleTheme() {
-  const isLight = document.body.classList.toggle('theme-light');
-  localStorage.setItem('preferred_theme', isLight ? 'light' : 'dark');
-  const icon = document.getElementById('theme-icon');
-  if (icon) icon.textContent = isLight ? '🌙' : '☀️';
+  // Maintained as graceful no-op if invoked
 }
 
 function initTheme() {
-  const saved = localStorage.getItem('preferred_theme');
-  if (saved === 'light') {
-    document.body.classList.add('theme-light');
-    const icon = document.getElementById('theme-icon');
-    if (icon) icon.textContent = '🌙';
-  }
+  localStorage.removeItem('preferred_theme');
 }
 
 // ── DOM Ready Initialization ──────────────────────────────────
