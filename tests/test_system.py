@@ -156,6 +156,12 @@ def test_emergency_code_red_preemption(client):
 def test_bed_management_api(client):
     """Test bed admission and discharge flow."""
     login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        for b in Bed.query.all():
+            b.patient_id = None
+            b.status = 'vacant'
+        db.session.commit()
+
     # List beds
     res = client.get('/api/beds')
     assert res.status_code == 200
@@ -340,3 +346,116 @@ def test_emergency_preemption_respects_doctor_shift():
                 assert time_to_minutes(plan['rescheduled_slot']['end_time']) <= time_to_minutes(doc.available_until)
             else:
                 assert plan.get('needs_reschedule') is True
+
+
+def test_specialization_flexible_compatibility():
+    """Verify alias mapping and flexible specialization matching."""
+    from optimizer import are_specializations_compatible, normalize_specialization
+    assert normalize_specialization('Cardio') == 'cardiology'
+    assert normalize_specialization('cardiologist') == 'cardiology'
+    assert normalize_specialization('ortho') == 'orthopedics'
+    assert are_specializations_compatible('Cardiology', 'cardiologist') is True
+    assert are_specializations_compatible('General Surgery', 'surgery') is True
+    assert are_specializations_compatible('Pediatrics', 'pediatrician') is True
+    assert are_specializations_compatible('Neurology', 'Cardiology') is False
+
+
+def test_appointment_status_state_machine(client):
+    """Verify appointment status transition validation."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        appt = Appointment.query.filter_by(status='scheduled').first()
+        if not appt:
+            appt = Appointment(patient_id=1, doctor_id=1, room_id=1, date="2025-01-01",
+                               start_time="09:00", end_time="09:30", duration_minutes=30, status="scheduled")
+            db.session.add(appt)
+            db.session.commit()
+        appt_id = appt.id
+
+    # scheduled -> in_progress (valid)
+    res = client.patch(f'/api/appointments/{appt_id}/status', json={'status': 'in_progress'})
+    assert res.status_code == 200
+    assert res.get_json()['status'] == 'in_progress'
+
+    # in_progress -> completed (valid)
+    res = client.patch(f'/api/appointments/{appt_id}/status', json={'status': 'completed'})
+    assert res.status_code == 200
+    assert res.get_json()['status'] == 'completed'
+
+    # completed -> scheduled (invalid transition: terminal state)
+    res = client.patch(f'/api/appointments/{appt_id}/status', json={'status': 'scheduled'})
+    assert res.status_code == 400
+    assert 'Invalid status transition' in res.get_json()['error']
+
+
+def test_bed_admission_guards(client):
+    """Verify validation when admitting patients to beds."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        for b in Bed.query.all():
+            b.patient_id = None
+            b.status = 'vacant'
+        db.session.commit()
+
+    # Fetch beds
+    beds = client.get('/api/beds').get_json()
+    vacant = [b for b in beds if b['status'] == 'vacant']
+    assert len(vacant) >= 2, "Need at least 2 vacant beds to test admission guards"
+    b1 = vacant[0]['id']
+    b2 = vacant[1]['id']
+
+    # Missing patient_id
+    res = client.post(f'/api/beds/{b1}/admit', json={})
+    assert res.status_code == 400
+
+    # Admit patient 1 to bed 1
+    res_admit = client.post(f'/api/beds/{b1}/admit', json={'patient_id': 1})
+    assert res_admit.status_code == 200
+
+    # Cannot admit another patient to already occupied bed 1
+    res = client.post(f'/api/beds/{b1}/admit', json={'patient_id': 2})
+    assert res.status_code == 400
+    assert 'already occupied' in res.get_json()['error']
+
+    # Cannot admit patient 1 into bed 2 when already in bed 1
+    res = client.post(f'/api/beds/{b2}/admit', json={'patient_id': 1})
+    assert res.status_code == 400
+    assert 'already admitted' in res.get_json()['error']
+
+
+def test_deletion_safeguards_active_appointments(client):
+    """Verify deletion of doctor or patient is rejected if active appointments exist."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        # Ensure active appointment exists
+        appt = Appointment.query.filter_by(status='scheduled').first()
+        if not appt:
+            appt = Appointment(patient_id=1, doctor_id=1, room_id=1, date="2025-01-01",
+                               start_time="09:00", end_time="09:30", duration_minutes=30, status="scheduled")
+            db.session.add(appt)
+            db.session.commit()
+        doc_id = appt.doctor_id
+        pat_id = appt.patient_id
+
+    # Attempt delete doctor with active appt
+    res = client.delete(f'/api/doctors/{doc_id}')
+    assert res.status_code == 400
+    assert 'active appointment' in res.get_json()['error']
+
+    # Attempt delete patient with active appt
+    res = client.delete(f'/api/patients/{pat_id}')
+    assert res.status_code == 400
+    assert 'active appointment' in res.get_json()['error']
+
+
+def test_unique_constraint_conflicts(client):
+    """Verify unique constraint collisions return HTTP 409 Conflict."""
+    login_as(client, 'admin', 'Admin#2025!')
+    # Add room
+    res1 = client.post('/api/rooms', json={'room_number': 'UNIQUE-TEST-101', 'department_id': 1})
+    assert res1.status_code in (201, 409)
+
+    # Add duplicate room
+    res2 = client.post('/api/rooms', json={'room_number': 'UNIQUE-TEST-101', 'department_id': 1})
+    assert res2.status_code == 409
+    assert 'already exists' in res2.get_json()['error']

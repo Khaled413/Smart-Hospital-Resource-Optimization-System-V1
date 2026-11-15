@@ -14,6 +14,8 @@ from functools import wraps
 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from sqlalchemy.orm import joinedload
+from sqlalchemy.exc import IntegrityError
 
 from config import get_config, config_by_name
 from models import (
@@ -159,6 +161,23 @@ def safe_float(val, default=0.0):
         return float(val)
     except (ValueError, TypeError):
         return default
+
+from zoneinfo import ZoneInfo
+
+
+def get_current_datetime():
+    """Return timezone-aware current datetime based on APP_TIMEZONE."""
+    tz_str = app.config.get('APP_TIMEZONE', 'Africa/Cairo') if app else 'Africa/Cairo'
+    try:
+        return datetime.now(ZoneInfo(tz_str))
+    except Exception:
+        return datetime.now()
+
+
+def get_current_date():
+    """Return current date string YYYY-MM-DD in configured timezone."""
+    return get_current_datetime().strftime('%Y-%m-%d')
+
 
 def get_current_user():
     user_id = session.get('user_id')
@@ -363,7 +382,7 @@ def api_change_password():
 @login_required
 @role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_dashboard():
-    today = date.today().isoformat()
+    today = get_current_date()
     total_patients = Patient.query.count()
     total_doctors = Doctor.query.count()
     total_rooms = Room.query.count()
@@ -376,8 +395,8 @@ def api_dashboard():
     appointments_today = Appointment.query.filter_by(date=today).count()
     emergencies_today = Appointment.query.filter_by(date=today, is_emergency=True).count()
 
-    appts = Appointment.query.all()
-    avg_wait = (sum(a.waiting_time for a in appts) / len(appts)) if appts else 0
+    today_appts = Appointment.query.filter_by(date=today).all()
+    avg_wait = (sum(a.waiting_time for a in today_appts) / len(today_appts)) if today_appts else 0
 
     doctors = Doctor.query.all()
     total_avail_minutes = sum(
@@ -388,19 +407,27 @@ def api_dashboard():
     booked_today_minutes = sum(a.duration_minutes for a in scheduled_today_appts)
     utilization = round((booked_today_minutes / total_avail_minutes * 100), 1) if total_avail_minutes > 0 else 0
 
-    priority_dist = {}
-    for p in Patient.query.all():
-        priority_dist[p.priority] = priority_dist.get(p.priority, 0) + 1
+    priority_dist = dict(
+        db.session.query(Patient.priority, db.func.count(Patient.id))
+        .group_by(Patient.priority).all()
+    )
 
-    dept_workload = {}
-    for d in Department.query.all():
-        doc_ids = [doc.id for doc in Doctor.query.filter_by(department_id=d.id).all()]
-        count = Appointment.query.filter(Appointment.doctor_id.in_(doc_ids)).count() if doc_ids else 0
-        dept_workload[d.name] = count
+    dept_counts = (
+        db.session.query(Department.name, db.func.count(Appointment.id))
+        .join(Doctor, Doctor.department_id == Department.id)
+        .join(Appointment, Appointment.doctor_id == Doctor.id)
+        .group_by(Department.name).all()
+    )
+    dept_workload = {name: count for name, count in dept_counts}
 
+    doc_today_counts = dict(
+        db.session.query(Appointment.doctor_id, db.func.count(Appointment.id))
+        .filter(Appointment.date == today)
+        .group_by(Appointment.doctor_id).all()
+    )
     doctor_util = []
     for doc in doctors:
-        booked = Appointment.query.filter_by(doctor_id=doc.id, date=today).count()
+        booked = doc_today_counts.get(doc.id, 0)
         util_pct = round((booked / doc.max_patients_per_day) * 100, 1) if doc.max_patients_per_day else 0
         doctor_util.append({'name': doc.name, 'utilization': util_pct, 'booked': booked, 'spec': doc.specialization})
 
@@ -432,7 +459,7 @@ def api_dashboard():
 def api_patients():
     search = request.args.get('search', '').strip().lower()
     priority = request.args.get('priority', '')
-    query = Patient.query
+    query = Patient.query.options(joinedload(Patient.appointments))
     if search:
         query = query.filter(Patient.name.ilike(f'%{search}%'))
     if priority:
@@ -507,6 +534,15 @@ def api_update_patient(pid):
 @role_required(['admin'])
 def api_delete_patient(pid):
     patient = db.get_or_404(Patient, pid)
+    active_count = Appointment.query.filter(
+        Appointment.patient_id == pid,
+        Appointment.status.in_(['scheduled', 'in_progress'])
+    ).count()
+    if active_count > 0:
+        return jsonify({
+            'error': f"Cannot delete patient '{patient.name}' who has {active_count} active appointment(s). Please cancel or complete them first."
+        }), 400
+
     name = patient.name
     Appointment.query.filter_by(patient_id=pid).delete()
     # Unlink any bed
@@ -526,8 +562,14 @@ def api_delete_patient(pid):
 @login_required
 @role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_doctors():
-    doctors = Doctor.query.all()
-    return jsonify([d.to_dict() for d in doctors])
+    today_iso = get_current_date()
+    appt_counts = dict(
+        db.session.query(Appointment.doctor_id, db.func.count(Appointment.id))
+        .filter(Appointment.date == today_iso, Appointment.status != 'cancelled')
+        .group_by(Appointment.doctor_id).all()
+    )
+    doctors = Doctor.query.options(joinedload(Doctor.dept)).all()
+    return jsonify([d.to_dict(appointments_today=appt_counts.get(d.id, 0)) for d in doctors])
 
 
 @app.route('/api/doctors', methods=['POST'])
@@ -540,8 +582,8 @@ def api_add_doctor():
     doctor = Doctor(
         name=data.get('name'),
         specialization=data.get('specialization', ''),
-        department_id=int(data.get('department_id', 1)),
-        max_patients_per_day=int(data.get('max_patients_per_day', 10)),
+        department_id=safe_int(data.get('department_id'), 1),
+        max_patients_per_day=safe_int(data.get('max_patients_per_day'), 10),
         available_from=data.get('available_from', '08:00'),
         available_until=data.get('available_until', '17:00')
     )
@@ -557,10 +599,13 @@ def api_add_doctor():
 def api_update_doctor(did):
     doctor = db.get_or_404(Doctor, did)
     data = request.get_json() or {}
-    for field in ['name', 'specialization', 'department_id', 'max_patients_per_day',
-                  'available_from', 'available_until']:
+    for field in ['name', 'specialization', 'available_from', 'available_until']:
         if field in data:
             setattr(doctor, field, data[field])
+    if 'department_id' in data:
+        doctor.department_id = safe_int(data['department_id'], doctor.department_id)
+    if 'max_patients_per_day' in data:
+        doctor.max_patients_per_day = safe_int(data['max_patients_per_day'], doctor.max_patients_per_day)
     db.session.commit()
     log_audit('UPDATE', 'doctor', doctor.id, f"Updated doctor {doctor.name}")
     return jsonify(doctor.to_dict())
@@ -571,6 +616,15 @@ def api_update_doctor(did):
 @role_required(['admin'])
 def api_delete_doctor(did):
     doctor = db.get_or_404(Doctor, did)
+    active_count = Appointment.query.filter(
+        Appointment.doctor_id == did,
+        Appointment.status.in_(['scheduled', 'in_progress'])
+    ).count()
+    if active_count > 0:
+        return jsonify({
+            'error': f"Cannot delete doctor '{doctor.name}' who has {active_count} active appointment(s). Please reassign them first."
+        }), 400
+
     name = doctor.name
     Appointment.query.filter_by(doctor_id=did).delete()
     db.session.delete(doctor)
@@ -585,7 +639,7 @@ def api_delete_doctor(did):
 @login_required
 @role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_rooms():
-    rooms = Room.query.all()
+    rooms = Room.query.options(joinedload(Room.dept), joinedload(Room.beds)).all()
     return jsonify([r.to_dict() for r in rooms])
 
 
@@ -594,17 +648,26 @@ def api_rooms():
 @role_required(['admin'])
 def api_add_room():
     data = request.get_json() or {}
-    if not data.get('room_number'):
+    room_number = data.get('room_number')
+    if not room_number:
         return jsonify({'error': 'Room number is required'}), 400
+    if Room.query.filter_by(room_number=room_number).first():
+        return jsonify({'error': f"Room '{room_number}' already exists"}), 409
+
     room = Room(
-        room_number=data.get('room_number'),
-        department_id=int(data.get('department_id', 1)),
+        room_number=room_number,
+        department_id=safe_int(data.get('department_id'), 1),
         room_type=data.get('room_type', 'consultation'),
-        capacity=int(data.get('capacity', 1)),
+        capacity=safe_int(data.get('capacity'), 1),
         status=data.get('status', 'available')
     )
     db.session.add(room)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f"Room '{room_number}' already exists"}), 409
+
     log_audit('CREATE', 'room', room.id, f"Added room {room.room_number}")
     return jsonify(room.to_dict()), 201
 
@@ -615,10 +678,24 @@ def api_add_room():
 def api_update_room(rid):
     room = db.get_or_404(Room, rid)
     data = request.get_json() or {}
-    for field in ['room_number', 'department_id', 'room_type', 'capacity', 'status']:
+    for field in ['room_type', 'status']:
         if field in data:
             setattr(room, field, data[field])
-    db.session.commit()
+    if 'room_number' in data and data['room_number'] != room.room_number:
+        existing = Room.query.filter_by(room_number=data['room_number']).first()
+        if existing:
+            return jsonify({'error': f"Room number '{data['room_number']}' already in use"}), 409
+        room.room_number = data['room_number']
+    if 'department_id' in data:
+        room.department_id = safe_int(data['department_id'], room.department_id)
+    if 'capacity' in data:
+        room.capacity = safe_int(data['capacity'], room.capacity)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f"Conflict updating room {room.id}"}), 409
+
     log_audit('UPDATE', 'room', room.id, f"Updated room {room.room_number}")
     return jsonify(room.to_dict())
 
@@ -628,6 +705,20 @@ def api_update_room(rid):
 @role_required(['admin'])
 def api_delete_room(rid):
     room = db.get_or_404(Room, rid)
+    active_appts = Appointment.query.filter(
+        Appointment.room_id == rid,
+        Appointment.status.in_(['scheduled', 'in_progress'])
+    ).count()
+    if active_appts > 0:
+        return jsonify({
+            'error': f"Cannot delete room '{room.room_number}' with {active_appts} active appointment(s). Please reassign them first."
+        }), 400
+    occupied_beds = Bed.query.filter_by(room_id=rid, status='occupied').count()
+    if occupied_beds > 0:
+        return jsonify({
+            'error': f"Cannot delete room '{room.room_number}' with {occupied_beds} occupied bed(s). Please discharge or transfer patients first."
+        }), 400
+
     number = room.room_number
     Appointment.query.filter_by(room_id=rid).delete()
     Bed.query.filter_by(room_id=rid).delete()
@@ -652,13 +743,24 @@ def api_departments():
 @role_required(['admin'])
 def api_add_department():
     data = request.get_json() or {}
+    name = data.get('name')
+    if not name:
+        return jsonify({'error': 'Department name is required'}), 400
+    if Department.query.filter_by(name=name).first():
+        return jsonify({'error': f"Department '{name}' already exists"}), 409
+
     dept = Department(
-        name=data.get('name'),
-        capacity=int(data.get('capacity', 50)),
+        name=name,
+        capacity=safe_int(data.get('capacity'), 50),
         description=data.get('description', '')
     )
     db.session.add(dept)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f"Department '{name}' already exists"}), 409
+
     log_audit('CREATE', 'department', dept.id, f"Added department {dept.name}")
     return jsonify(dept.to_dict()), 201
 
@@ -669,7 +771,11 @@ def api_add_department():
 @login_required
 @role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_beds():
-    beds = Bed.query.all()
+    beds = Bed.query.options(
+        joinedload(Bed.room),
+        joinedload(Bed.dept),
+        joinedload(Bed.patient)
+    ).all()
     return jsonify([b.to_dict() for b in beds])
 
 
@@ -678,17 +784,26 @@ def api_beds():
 @role_required(['admin'])
 def api_add_bed():
     data = request.get_json() or {}
-    if not data.get('bed_number'):
+    bed_number = data.get('bed_number')
+    if not bed_number:
         return jsonify({'error': 'Bed number is required'}), 400
+    if Bed.query.filter_by(bed_number=bed_number).first():
+        return jsonify({'error': f"Bed '{bed_number}' already exists"}), 409
+
     bed = Bed(
-        bed_number=data.get('bed_number'),
-        room_id=int(data.get('room_id', 1)),
-        department_id=int(data.get('department_id', 1)),
+        bed_number=bed_number,
+        room_id=safe_int(data.get('room_id'), 1),
+        department_id=safe_int(data.get('department_id'), 1),
         status=data.get('status', 'vacant'),
         notes=data.get('notes', '')
     )
     db.session.add(bed)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f"Bed '{bed_number}' already exists"}), 409
+
     log_audit('CREATE', 'bed', bed.id, f"Added bed {bed.bed_number}")
     return jsonify(bed.to_dict()), 201
 
@@ -717,13 +832,30 @@ def api_update_bed_status(bid):
 @role_required(['admin', 'manager', 'receptionist'])
 def api_admit_patient_to_bed(bid):
     bed = db.get_or_404(Bed, bid)
+    if bed.status == 'occupied':
+        return jsonify({'error': f"Bed {bed.bed_number} is already occupied"}), 400
+    if bed.status == 'maintenance':
+        return jsonify({'error': f"Bed {bed.bed_number} is under maintenance and cannot accept patients"}), 400
+
     data = request.get_json() or {}
     patient_id = data.get('patient_id')
-    patient = db.get_or_404(Patient, patient_id)
+    if not patient_id:
+        return jsonify({'error': 'patient_id is required for admission'}), 400
+
+    patient = db.session.get(Patient, patient_id)
+    if not patient:
+        return jsonify({'error': f'Patient #{patient_id} not found'}), 404
+
+    # Validate patient is not already admitted in another bed
+    existing_bed = Bed.query.filter_by(patient_id=patient.id).first()
+    if existing_bed and existing_bed.id != bed.id:
+        return jsonify({
+            'error': f"Patient '{patient.name}' is already admitted to bed {existing_bed.bed_number}"
+        }), 400
 
     bed.patient_id = patient.id
     bed.status = 'occupied'
-    bed.admission_date = data.get('admission_date', date.today().isoformat())
+    bed.admission_date = data.get('admission_date') or get_current_date()
     bed.expected_discharge = data.get('expected_discharge', '')
     bed.notes = data.get('notes', '')
     db.session.commit()
@@ -737,6 +869,8 @@ def api_admit_patient_to_bed(bid):
 @role_required(['admin', 'manager', 'receptionist'])
 def api_discharge_patient_from_bed(bid):
     bed = db.get_or_404(Bed, bid)
+    if bed.status != 'occupied' and not bed.patient_id:
+        return jsonify({'error': f"Bed {bed.bed_number} is not currently occupied"}), 400
     patient_name = bed.patient.name if bed.patient else 'Patient'
     bed.patient_id = None
     bed.status = 'cleaning'  # Moves to cleaning first before vacant
@@ -752,7 +886,7 @@ def api_discharge_patient_from_bed(bid):
 @login_required
 @role_required(['admin', 'manager', 'doctor', 'receptionist'])
 def api_equipment():
-    equip = Equipment.query.all()
+    equip = Equipment.query.options(joinedload(Equipment.dept), joinedload(Equipment.room)).all()
     return jsonify([e.to_dict() for e in equip])
 
 
@@ -766,8 +900,8 @@ def api_add_equipment():
     eq = Equipment(
         name=data.get('name'),
         equipment_type=data.get('equipment_type', 'ecg'),
-        department_id=int(data.get('department_id', 1)),
-        room_id=int(data['room_id']) if data.get('room_id') else None,
+        department_id=safe_int(data.get('department_id'), 1),
+        room_id=safe_int(data.get('room_id'), None) if data.get('room_id') else None,
         status=data.get('status', 'available'),
         notes=data.get('notes', '')
     )
@@ -800,12 +934,26 @@ def api_update_equipment_status(eid):
 def api_appointments():
     status = request.args.get('status', '')
     date_filter = request.args.get('date', '')
-    appts = Appointment.query
+    appts = Appointment.query.options(
+        joinedload(Appointment.patient),
+        joinedload(Appointment.doctor),
+        joinedload(Appointment.room),
+        joinedload(Appointment.equipment)
+    )
     if status:
         appts = appts.filter_by(status=status)
     if date_filter:
         appts = appts.filter_by(date=date_filter)
     return jsonify([a.to_dict() for a in appts.order_by(Appointment.date, Appointment.start_time).all()])
+
+
+VALID_APPOINTMENT_TRANSITIONS = {
+    'scheduled': {'in_progress', 'cancelled', 'no_show'},
+    'in_progress': {'completed', 'cancelled'},
+    'completed': set(),
+    'cancelled': set(),
+    'no_show': set(),
+}
 
 
 @app.route('/api/appointments/<int:aid>/status', methods=['PATCH'])
@@ -822,6 +970,15 @@ def api_update_appointment_status(aid):
     new_status = data.get('status')
     if new_status not in ('scheduled', 'in_progress', 'completed', 'cancelled', 'no_show'):
         return jsonify({'error': 'Invalid appointment status'}), 400
+
+    # Validate state machine transitions
+    if new_status != appt.status:
+        allowed = VALID_APPOINTMENT_TRANSITIONS.get(appt.status, set())
+        if new_status not in allowed:
+            return jsonify({
+                'error': f"Invalid status transition from '{appt.status}' to '{new_status}'. Allowed transitions: {sorted(list(allowed)) if allowed else 'None (terminal state)'}"
+            }), 400
+
     appt.status = new_status
     if data.get('clinical_notes'):
         appt.clinical_notes = data['clinical_notes']

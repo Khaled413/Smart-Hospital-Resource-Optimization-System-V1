@@ -95,20 +95,20 @@ class Doctor(db.Model):
     # Relationships
     appointments = db.relationship('Appointment', backref='doctor', lazy=True)
 
-    def to_dict(self):
-        dept = db.session.get(Department, self.department_id)
-        today_iso = datetime.utcnow().date().isoformat()
-        appointments_today = Appointment.query.filter(
-            Appointment.doctor_id == self.id,
-            Appointment.date == today_iso,
-            Appointment.status != 'cancelled'
-        ).count()
+    def to_dict(self, appointments_today=None):
+        if appointments_today is None:
+            today_iso = datetime.utcnow().date().isoformat()
+            appointments_today = Appointment.query.filter(
+                Appointment.doctor_id == self.id,
+                Appointment.date == today_iso,
+                Appointment.status != 'cancelled'
+            ).count()
         return {
             'id': self.id,
             'name': self.name,
             'specialization': self.specialization,
             'department_id': self.department_id,
-            'department_name': dept.name if dept else 'Unknown',
+            'department_name': self.dept.name if self.dept else 'Unknown',
             'max_patients_per_day': self.max_patients_per_day,
             'available_from': self.available_from,
             'available_until': self.available_until,
@@ -134,14 +134,14 @@ class Room(db.Model):
     # Relationships
     appointments = db.relationship('Appointment', backref='room', lazy=True)
     beds = db.relationship('Bed', backref='room', lazy=True)
+    equipment = db.relationship('Equipment', backref='room', lazy=True)
 
     def to_dict(self):
-        dept = db.session.get(Department, self.department_id)
         return {
             'id': self.id,
             'room_number': self.room_number,
             'department_id': self.department_id,
-            'department_name': dept.name if dept else 'Unknown',
+            'department_name': self.dept.name if self.dept else 'Unknown',
             'room_type': self.room_type,
             'capacity': self.capacity,
             'status': self.status,
@@ -169,15 +169,13 @@ class Bed(db.Model):
     patient = db.relationship('Patient', backref=db.backref('admitted_bed', uselist=False))
 
     def to_dict(self):
-        room = db.session.get(Room, self.room_id)
-        dept = db.session.get(Department, self.department_id)
         return {
             'id': self.id,
             'bed_number': self.bed_number,
             'room_id': self.room_id,
-            'room_number': room.room_number if room else '',
+            'room_number': self.room.room_number if self.room else '',
             'department_id': self.department_id,
-            'department_name': dept.name if dept else '',
+            'department_name': self.dept.name if self.dept else '',
             'status': self.status,
             'patient_id': self.patient_id,
             'patient_name': self.patient.name if self.patient else None,
@@ -203,16 +201,14 @@ class Equipment(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
-        dept = db.session.get(Department, self.department_id)
-        room = db.session.get(Room, self.room_id) if self.room_id else None
         return {
             'id': self.id,
             'name': self.name,
             'equipment_type': self.equipment_type,
             'department_id': self.department_id,
-            'department_name': dept.name if dept else '',
+            'department_name': self.dept.name if self.dept else '',
             'room_id': self.room_id,
-            'room_number': room.room_number if room else 'Portable / Mobile',
+            'room_number': self.room.room_number if self.room else 'Portable / Mobile',
             'status': self.status,
             'notes': self.notes
         }
@@ -254,9 +250,12 @@ class Patient(db.Model):
         scores = {'critical': 4, 'urgent': 3, 'normal': 2, 'low': 1}
         return scores.get(self.priority, 2)
 
-    def to_dict(self):
-        latest_appt = Appointment.query.filter_by(patient_id=self.id)\
-            .order_by(Appointment.created_at.desc()).first()
+    def to_dict(self, latest_status=None):
+        if latest_status is None:
+            if self.appointments:
+                latest_status = sorted(self.appointments, key=lambda a: a.created_at, reverse=True)[0].status
+            else:
+                latest_status = 'unscheduled'
         return {
             'id': self.id,
             'name': self.name,
@@ -275,7 +274,7 @@ class Patient(db.Model):
             },
             'no_show_risk': round(self.no_show_risk or 0.1, 2),
             'registered_at': self.registered_at.isoformat() if self.registered_at else '',
-            'appointment_status': latest_appt.status if latest_appt else 'unscheduled'
+            'appointment_status': latest_status
         }
 
 

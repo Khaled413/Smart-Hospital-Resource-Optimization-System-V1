@@ -42,8 +42,57 @@ PROCEDURE_DURATIONS = {
     'neurology': 45,
     'orthopedics': 30,
     'pediatrics': 20,
-    'general surgery': 60
+    'general surgery': 60,
+    'general medicine': 25,
+    'dermatology': 20,
+    'oncology': 45
 }
+
+SPECIALIZATION_ALIASES = {
+    'cardio': 'cardiology',
+    'cardiology': 'cardiology',
+    'cardiologist': 'cardiology',
+    'heart': 'cardiology',
+    'neuro': 'neurology',
+    'neurology': 'neurology',
+    'neurologist': 'neurology',
+    'ortho': 'orthopedics',
+    'orthopedic': 'orthopedics',
+    'orthopedics': 'orthopedics',
+    'pediatric': 'pediatrics',
+    'pediatrics': 'pediatrics',
+    'pediatrician': 'pediatrics',
+    'general medicine': 'general medicine',
+    'internal medicine': 'general medicine',
+    'general': 'general medicine',
+    'general surgery': 'general surgery',
+    'surgery': 'general surgery',
+    'surgeon': 'general surgery',
+    'dermatology': 'dermatology',
+    'dermatologist': 'dermatology',
+    'oncology': 'oncology',
+    'oncologist': 'oncology',
+}
+
+
+def normalize_specialization(spec: str) -> str:
+    """Normalize specialization strings into canonical taxonomy."""
+    if not spec:
+        return 'general medicine'
+    clean = spec.strip().lower()
+    return SPECIALIZATION_ALIASES.get(clean, clean)
+
+
+def are_specializations_compatible(doc_spec: str, patient_spec: str) -> bool:
+    """Check if doctor specialization matches patient requirement flexibly."""
+    norm_doc = normalize_specialization(doc_spec)
+    norm_pat = normalize_specialization(patient_spec)
+    if norm_doc == norm_pat:
+        return True
+    if norm_doc in norm_pat or norm_pat in norm_doc:
+        return True
+    return False
+
 
 DEFAULT_BUFFER_MINUTES = 10
 PRIORITY_SCORE = {'critical': 4, 'urgent': 3, 'normal': 2, 'low': 1}
@@ -67,7 +116,7 @@ def times_overlap(start1, end1, start2, end2) -> bool:
 
 def get_patient_duration(patient) -> int:
     """Return procedure duration in minutes based on specialization and clinical triage."""
-    spec = getattr(patient, 'required_specialization', '').lower()
+    spec = normalize_specialization(getattr(patient, 'required_specialization', ''))
     base = PROCEDURE_DURATIONS.get(spec, 30)
     if getattr(patient, 'priority', '') == 'critical' or getattr(patient, 'triage_level', 3) <= 2:
         base += 10
@@ -249,7 +298,7 @@ def run_greedy(patients, doctors, rooms, target_date, schedule_state=None):
 
         compatible_doctors = [
             d for d in doctors
-            if d.specialization.lower() == patient.required_specialization.lower()
+            if are_specializations_compatible(d.specialization, patient.required_specialization)
         ]
 
         if not compatible_doctors:
@@ -379,7 +428,7 @@ def run_lp(patients, doctors, rooms, target_date, schedule_state=None):
     var_keys = []
     for p in unscheduled_patients:
         p_dur = durations[p.id]
-        comp_docs = [d for d in doctors if d.specialization.lower() == p.required_specialization.lower()]
+        comp_docs = [d for d in doctors if are_specializations_compatible(d.specialization, p.required_specialization)]
         for d in comp_docs:
             rem_quota = d.max_patients_per_day - schedule_state.doctor_patient_count.get(d.id, 0)
             if rem_quota <= 0:
@@ -672,7 +721,10 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
 
     now_mins = now_dt.hour * 60 + now_dt.minute
 
-    compat_docs = [d for d in doctors if d.specialization.lower() == emergency_patient.required_specialization.lower()]
+    compat_docs = [
+        d for d in doctors
+        if are_specializations_compatible(d.specialization, emergency_patient.required_specialization)
+    ]
     if not compat_docs:
         compat_docs = doctors
 
@@ -741,7 +793,9 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
         emergency_start = target_start
         emergency_end = emergency_start + duration
 
-        log.append(f"[EMERGENCY] ⚠️ Preempting appointment #{target_appt.id} (Patient: {target_appt.patient.name}, Priority: {target_appt.patient.priority})")
+        p_name = target_appt.patient.name if target_appt.patient else f'Patient #{target_appt.patient_id}'
+        p_prio = target_appt.patient.priority if target_appt.patient else 'normal'
+        log.append(f"[EMERGENCY] ⚠️ Preempting appointment #{target_appt.id} (Patient: {p_name}, Priority: {p_prio})")
 
         bumped_duration = getattr(target_appt, 'duration_minutes', 30)
         doc_end = time_to_minutes(target_doc.available_until)
@@ -765,12 +819,13 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
                     ]
                     room_overlap = any(times_overlap(curr, curr_end + buffer, time_to_minutes(a.start_time), time_to_minutes(a.end_time) + getattr(a, 'buffer_minutes', 10)) for a in room_appts)
                     if not room_overlap:
+                        w_time = calculate_waiting_time(target_appt.patient, target_doc, curr, now_dt.strftime('%Y-%m-%d')) if target_appt.patient else max(0, curr - time_to_minutes(target_doc.available_from))
                         rescheduled_slot = {
                             'start_time': minutes_to_time(curr),
                             'end_time': minutes_to_time(curr_end),
                             'room_id': room.id,
                             'status': 'scheduled',
-                            'waiting_time': max(0, curr - time_to_minutes(target_doc.available_from))
+                            'waiting_time': w_time
                         }
                         break
             if rescheduled_slot:
