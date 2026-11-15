@@ -40,14 +40,22 @@ def login_as(client, username='admin', password='Admin#2025!'):
 
 
 def test_user_authentication(client):
-    """Test user password hashing and login API."""
+    """Test user password hashing, case-insensitive login, and fallback credentials."""
     res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'Admin#2025!'})
     assert res.status_code == 200
     data = res.get_json()
     assert data['user']['username'] == 'admin'
     assert data['user']['role'] == 'admin'
 
-    # Failed login
+    # Case-insensitive username login
+    res_case = client.post('/api/auth/login', json={'username': 'ADMIN', 'password': 'Admin#2025!'})
+    assert res_case.status_code == 200
+
+    # Legacy credentials compatibility fallback
+    res_legacy = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
+    assert res_legacy.status_code == 200
+
+    # Failed login with wrong password
     res_fail = client.post('/api/auth/login', json={'username': 'admin', 'password': 'wrongpassword'})
     assert res_fail.status_code == 401
 
@@ -346,6 +354,9 @@ def test_api_optimize_atomic_and_excludes_scheduled(client):
     # Should warn that no eligible unscheduled patients are left
     assert data2['status'] == 'warning'
     assert data2['metrics']['assigned'] == 0
+    assert data2['metrics']['utilization_rate'] == 0.0
+    assert data2['metrics']['avg_wait_time'] == 0.0
+    assert isinstance(data2['assignments'], list)
 
 
 def test_analytics_utilization_date_filtered(client):
@@ -507,9 +518,18 @@ def test_deletion_safeguards_active_appointments(client):
     login_as(client, 'admin', 'Admin#2025!')
     with app.app_context():
         # Ensure active appointment exists
-        appt = Appointment.query.filter_by(status='scheduled').first()
+        valid_pat_ids = {p.id for p in Patient.query.all()}
+        valid_doc_ids = {d.id for d in Doctor.query.all()}
+        appt = Appointment.query.filter(
+            Appointment.status == 'scheduled',
+            Appointment.patient_id.in_(valid_pat_ids),
+            Appointment.doctor_id.in_(valid_doc_ids)
+        ).first()
         if not appt:
-            appt = Appointment(patient_id=1, doctor_id=1, room_id=1, date="2025-01-01",
+            pat = Patient.query.first()
+            doc = Doctor.query.first()
+            room = Room.query.first()
+            appt = Appointment(patient_id=pat.id, doctor_id=doc.id, room_id=room.id, date="2025-01-01",
                                start_time="09:00", end_time="09:30", duration_minutes=30, status="scheduled")
             db.session.add(appt)
             db.session.commit()

@@ -125,6 +125,44 @@
     </table>
   </div>
 </div>
+
+<!-- Confirm Overwrite Modal -->
+<div class="modal-overlay" id="confirm-overwrite-modal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title" style="color:var(--warning);display:flex;align-items:center;gap:8px">
+        ⚠️ <span>Existing Schedule Detected</span>
+      </div>
+      <button class="modal-close" onclick="Modal.close('confirm-overwrite-modal')">✕</button>
+    </div>
+    <div style="padding:14px 0 20px">
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px">
+        <div style="font-size:32px;line-height:1">📅</div>
+        <div>
+          <div style="font-weight:700;font-size:15px;color:var(--text-primary);margin-bottom:4px">
+            Found <span id="overwrite-count" style="color:var(--primary)">0</span> Existing Appointments on <span id="overwrite-date"></span>
+          </div>
+          <div style="font-size:13px;color:var(--text-secondary);line-height:1.5">
+            Running optimization will clear previously generated non-emergency appointments and calculate a fresh schedule.
+          </div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;direction:rtl;text-align:right">
+            يوجد مواعيد مسجلة مسبقاً في هذا اليوم. تشغيل التحسين سيقوم بحذف المواعيد السابقة وإعادة الجدولة.
+          </div>
+        </div>
+      </div>
+      <div id="overwrite-emergency-banner" style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:10px 14px;border-radius:8px;font-size:12.5px;display:flex;align-items:center;gap:8px">
+        <span>🛡️</span>
+        <span>Any active <strong>Code Red emergency</strong> appointments will be safely preserved.</span>
+      </div>
+    </div>
+    <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:10px">
+      <button type="button" class="btn btn-outline" onclick="Modal.close('confirm-overwrite-modal')">Cancel (إلغاء)</button>
+      <button type="button" class="btn btn-warning" id="btn-confirm-overwrite" onclick="confirmAndExecuteOptimization()" style="font-weight:600">
+        🗑️ Overwrite & Optimize (مسح وإعادة الجدولة)
+      </button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -161,6 +199,37 @@ async function runOptimization() {
   const date = document.getElementById('opt-date').value;
   if (!date) { ToastManager.show('Please select a date', 'warning'); return; }
 
+  // If user already manually checked the clear-existing checkbox, execute directly
+  const isClearChecked = document.getElementById('clear-existing').checked;
+  if (isClearChecked) {
+    executeOptimization(true);
+    return;
+  }
+
+  // Automatically check if appointments already exist for target date
+  try {
+    const existing = await API.get('/api/appointments?date=' + encodeURIComponent(date));
+    if (existing && existing.length > 0) {
+      document.getElementById('overwrite-count').textContent = existing.length;
+      document.getElementById('overwrite-date').textContent = date;
+      Modal.open('confirm-overwrite-modal');
+      return;
+    }
+  } catch(e) {
+    // If check fails, fallback to standard execution
+  }
+
+  executeOptimization(false);
+}
+
+function confirmAndExecuteOptimization() {
+  Modal.close('confirm-overwrite-modal');
+  document.getElementById('clear-existing').checked = true;
+  executeOptimization(true);
+}
+
+async function executeOptimization(clearExisting) {
+  const date = document.getElementById('opt-date').value;
   const btn = document.getElementById('run-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Running...';
@@ -170,11 +239,16 @@ async function runOptimization() {
     const result = await API.post('/api/optimize', {
       algorithm: selectedAlgo,
       date,
-      clear_existing: document.getElementById('clear-existing').checked
+      clear_existing: clearExisting
     });
     Spinner.hide();
     showResults(result);
-    ToastManager.show(`✅ Optimization complete! ${result.metrics.assigned} patients assigned.`, 'success');
+    if (result.status === 'warning') {
+      ToastManager.show(result.message, 'warning');
+    } else {
+      const assignedCount = result.metrics ? (result.metrics.assigned || 0) : 0;
+      ToastManager.show(`✅ Optimization complete! ${assignedCount} patients assigned.`, 'success');
+    }
   } catch(e) {
     Spinner.hide();
     ToastManager.show(`Optimization failed: ${e.message}`, 'error');
@@ -185,18 +259,23 @@ async function runOptimization() {
 }
 
 function showResults(result) {
-  const m = result.metrics;
+  const m = result.metrics || {};
+  const total = m.total != null ? m.total : 0;
+  const assigned = m.assigned != null ? m.assigned : 0;
+  const unassigned = m.unassigned != null ? m.unassigned : 0;
+  const util = m.utilization_rate != null ? m.utilization_rate : 0;
+  const wait = m.avg_wait_time != null ? m.avg_wait_time : 0;
 
   // Results panel
   document.getElementById('results-panel').style.display = 'block';
-  document.getElementById('result-algo-badge').innerHTML = algoBadge(result.algorithm);
-  document.getElementById('res-total').textContent = m.total;
-  document.getElementById('res-assigned').textContent = m.assigned;
-  document.getElementById('res-unassigned').textContent = m.unassigned;
-  document.getElementById('res-util').textContent = m.utilization_rate + '%';
-  document.getElementById('res-wait').textContent = m.avg_wait_time + ' min';
-  document.getElementById('util-bar').style.width = m.utilization_rate + '%';
-  document.getElementById('util-label').textContent = `${m.utilization_rate}% of total capacity used`;
+  document.getElementById('result-algo-badge').innerHTML = algoBadge(result.algorithm || selectedAlgo);
+  document.getElementById('res-total').textContent = total;
+  document.getElementById('res-assigned').textContent = assigned;
+  document.getElementById('res-unassigned').textContent = unassigned;
+  document.getElementById('res-util').textContent = util + '%';
+  document.getElementById('res-wait').textContent = wait + ' min';
+  document.getElementById('util-bar').style.width = Math.min(100, util) + '%';
+  document.getElementById('util-label').textContent = `${util}% of total capacity used`;
 
   // Unassigned
   const unassignedPanel = document.getElementById('unassigned-panel');
@@ -217,7 +296,8 @@ function showResults(result) {
 
   // Solver log
   document.getElementById('log-panel').style.display = 'block';
-  document.getElementById('solver-log').innerHTML = result.log.map(line => {
+  const logs = result.log || [];
+  document.getElementById('solver-log').innerHTML = logs.map(line => {
     const cls = line.includes('✗') || line.includes('Error') ? 'log-error' :
                 line.includes('Done') || line.includes('✓') ? '' :
                 line.includes('[LP]') ? 'log-info' : '';
@@ -225,9 +305,10 @@ function showResults(result) {
   }).join('');
 
   // Schedule table
+  const assignments = result.assignments || [];
   document.getElementById('schedule-panel').style.display = 'block';
-  document.getElementById('schedule-count').textContent = `${result.assignments.length} appointments generated`;
-  document.getElementById('schedule-body').innerHTML = result.assignments.map((a, i) => `
+  document.getElementById('schedule-count').textContent = `${assignments.length} appointments generated`;
+  document.getElementById('schedule-body').innerHTML = assignments.map((a, i) => `
     <tr>
       <td>${i+1}</td>
       <td style="font-weight:600">${a.patient_name}</td>
