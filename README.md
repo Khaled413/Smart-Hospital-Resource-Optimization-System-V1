@@ -209,16 +209,16 @@ vercel
 
 ---
 
-## 🔑 Pre-Configured Demo Accounts
+## 🔑 User Accounts & Access Control
 
-Navigate to **`http://127.0.0.1:5000/login`** (or use the one-click auto-fill buttons):
+Navigate to **`http://127.0.0.1:5000/login`**:
 
-| Role | Username | Password | Operational Access |
+| Role | Username | Password Source | Operational Access |
 | :--- | :--- | :--- | :--- |
-| **👑 Super Admin** | `admin` | `admin123` | Full administrative control, user management, audit trails |
-| **👨‍⚕️ Physician** | `dr_sarah` | `doctor123` | Clinic consultation roster, diagnosis notes & prescriptions |
-| **🏢 Operations Director** | `manager` | `manager123` | Bed matrix, device fleets, crisis stress-test simulator |
-| **📋 Receptionist** | `receptionist` | `reception123` | Outpatient directory, Code Red emergency walk-in intake |
+| **👑 Super Admin** | `admin` | Set via `ADMIN_INITIAL_PASSWORD` or generated on seed | Full administrative control, user management, audit trails |
+| **👨‍⚕️ Physician** | `dr_sarah` | Set via `DOCTOR_INITIAL_PASSWORD` | Clinic consultation roster, diagnosis notes & prescriptions |
+| **🏢 Operations Director** | `manager` | Set via `MANAGER_INITIAL_PASSWORD` | Bed matrix, device fleets, crisis stress-test simulator |
+| **📋 Receptionist** | `receptionist` | Set via `RECEPTIONIST_INITIAL_PASSWORD` | Outpatient directory, Code Red emergency walk-in intake |
 
 ---
 

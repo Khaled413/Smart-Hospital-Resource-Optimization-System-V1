@@ -223,6 +223,37 @@ def api_me():
     return jsonify({'authenticated': False, 'user': None})
 
 
+@app.route('/api/auth/change-password', methods=['POST'])
+@login_required
+def api_change_password():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+
+    data = request.get_json() or {}
+    old_password = data.get('current_password') or data.get('old_password', '')
+    new_password = data.get('new_password', '')
+
+    if not old_password or not new_password:
+        return jsonify({'error': 'Both current_password and new_password are required'}), 400
+
+    if not user.check_password(old_password):
+        return jsonify({'error': 'Current password is incorrect'}), 400
+
+    if len(new_password) < 8:
+        return jsonify({'error': 'New password must be at least 8 characters long'}), 400
+
+    user.set_password(new_password)
+    user.must_change_password = False
+    db.session.commit()
+
+    log_audit('PASSWORD_CHANGE', 'user', user.id, f"User {user.username} updated password")
+    return jsonify({
+        'message': 'Password updated successfully',
+        'must_change_password': False
+    })
+
+
 # ─── API: Dashboard ───────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard')

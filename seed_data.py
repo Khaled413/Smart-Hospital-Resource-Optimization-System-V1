@@ -57,11 +57,55 @@ def seed_database():
         docs.append(doctor)
 
     # ── 3. Users (RBAC) ───────────────────────────────────────────────────────
+    import os
+    import secrets
+
+    admin_initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD')
+    admin_must_change = False
+    if not admin_initial_password:
+        admin_initial_password = secrets.token_urlsafe(12)
+        admin_must_change = True
+        print("\n" + "=" * 65)
+        print("  [SECURITY NOTICE] Generated One-Time Initial Admin Password:")
+        print(f"  Username: admin")
+        print(f"  Password: {admin_initial_password}")
+        print("  Note: Please change this password immediately upon first login.")
+        print("=" * 65 + "\n")
+
     users_data = [
-        {"username": "admin",        "email": "admin@hospital.org",      "role": "admin",        "name": "Dr. Chief Administrator", "pass": "admin123"},
-        {"username": "manager",      "email": "manager@hospital.org",    "role": "manager",      "name": "Operations Director",     "pass": "manager123"},
-        {"username": "receptionist", "email": "frontdesk@hospital.org",  "role": "receptionist", "name": "Front Desk Reception",    "pass": "reception123"},
-        {"username": "dr_sarah",     "email": "s.mitchell@hospital.org", "role": "doctor",       "name": "Dr. Sarah Mitchell",      "pass": "doctor123", "doc_id": docs[0].id},
+        {
+            "username": "admin",
+            "email": "admin@hospital.org",
+            "role": "admin",
+            "name": "Dr. Chief Administrator",
+            "pass": admin_initial_password,
+            "must_change": admin_must_change
+        },
+        {
+            "username": "manager",
+            "email": "manager@hospital.org",
+            "role": "manager",
+            "name": "Operations Director",
+            "pass": os.environ.get('MANAGER_INITIAL_PASSWORD', 'Manager#2025!'),
+            "must_change": False
+        },
+        {
+            "username": "receptionist",
+            "email": "frontdesk@hospital.org",
+            "role": "receptionist",
+            "name": "Front Desk Reception",
+            "pass": os.environ.get('RECEPTIONIST_INITIAL_PASSWORD', 'Reception#2025!'),
+            "must_change": False
+        },
+        {
+            "username": "dr_sarah",
+            "email": "s.mitchell@hospital.org",
+            "role": "doctor",
+            "name": "Dr. Sarah Mitchell",
+            "pass": os.environ.get('DOCTOR_INITIAL_PASSWORD', 'Doctor#2025!'),
+            "doc_id": docs[0].id,
+            "must_change": False
+        },
     ]
     for u in users_data:
         user = User(
@@ -69,7 +113,8 @@ def seed_database():
             email=u["email"],
             role=u["role"],
             full_name=u["name"],
-            doctor_id=u.get("doc_id")
+            doctor_id=u.get("doc_id"),
+            must_change_password=u.get("must_change", False)
         )
         user.set_password(u["pass"])
         db.session.add(user)

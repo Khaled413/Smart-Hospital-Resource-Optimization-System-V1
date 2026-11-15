@@ -23,6 +23,7 @@ class User(db.Model):
     role = db.Column(db.String(30), default='receptionist')  # admin, doctor, receptionist, manager
     full_name = db.Column(db.String(150), default='')
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctors.id'), nullable=True)
+    must_change_password = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     doctor = db.relationship('Doctor', backref=db.backref('user_account', uselist=False))
@@ -40,7 +41,8 @@ class User(db.Model):
             'email': self.email,
             'role': self.role,
             'full_name': self.full_name or self.username,
-            'doctor_id': self.doctor_id
+            'doctor_id': self.doctor_id,
+            'must_change_password': self.must_change_password
         }
 
 

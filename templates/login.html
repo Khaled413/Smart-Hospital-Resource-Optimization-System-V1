@@ -74,13 +74,14 @@
 
     <!-- Quick Demo Logins -->
     <div style="margin-bottom:24px;background:#f8fafc;padding:14px;border-radius:12px;border:1px dashed #cbd5e1">
-      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:10px;text-align:center;text-transform:uppercase;letter-spacing:0.5px">⚡ Quick Auto-Fill Demo Accounts:</div>
+      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:10px;text-align:center;text-transform:uppercase;letter-spacing:0.5px">⚡ Quick Select Role:</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <button type="button" class="demo-role-btn" onclick="fillCreds('admin', 'admin123')">👑 Admin</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('dr_sarah', 'doctor123')">👨‍⚕️ Dr. Sarah</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('manager', 'manager123')">🏢 Operations</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('receptionist', 'reception123')">📋 Reception</button>
+        <button type="button" class="demo-role-btn" onclick="fillUser('admin')">👑 Admin</button>
+        <button type="button" class="demo-role-btn" onclick="fillUser('dr_sarah')">👨‍⚕️ Dr. Sarah</button>
+        <button type="button" class="demo-role-btn" onclick="fillUser('manager')">🏢 Operations</button>
+        <button type="button" class="demo-role-btn" onclick="fillUser('receptionist')">📋 Reception</button>
       </div>
+      <div style="font-size:10.5px;color:#64748b;margin-top:8px;text-align:center">Admin credentials are set via ADMIN_INITIAL_PASSWORD or generated securely on seed.</div>
     </div>
 
     <form id="login-form" onsubmit="handleLogin(event)">
@@ -107,6 +108,10 @@
 <div class="toast-container" id="toast-container"></div>
 <script src="/static/js/app.js"></script>
 <script>
+function fillUser(u) {
+  document.getElementById('login-username').value = u;
+  document.getElementById('login-password').focus();
+}
 function fillCreds(u, p) {
   document.getElementById('login-username').value = u;
   document.getElementById('login-password').value = p;
@@ -122,7 +127,11 @@ async function handleLogin(e) {
 
   try {
     const res = await API.post('/api/auth/login', { username: u, password: p });
-    ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
+    if (res.user && res.user.must_change_password) {
+      ToastManager.show(`Welcome! Please update your default password.`, 'warning');
+    } else {
+      ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
+    }
     setTimeout(() => {
       window.location.href = '/';
     }, 600);
