@@ -17,7 +17,7 @@ os.environ['DEMO_MODE'] = 'true'
 os.environ['RATELIMIT_ENABLED'] = 'false'
 
 from app import app, limiter
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User, Role, Permission, UserPermissionOverride
+from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User
 from optimizer import (
     run_greedy, run_lp, run_hybrid, handle_emergency_preemption,
     predict_no_show_risk, run_scenario_simulation, run_optimization,
