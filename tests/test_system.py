@@ -324,6 +324,12 @@ def test_api_optimize_atomic_and_excludes_scheduled(client):
     login_as(client, 'admin', 'Admin#2025!')
     target_date = "2025-10-10"
 
+    with app.app_context():
+        Patient.query.filter(Patient.id <= 20).update({'preferred_date': target_date})
+        Patient.query.filter(Patient.id > 20).delete()
+        Appointment.query.filter_by(date=target_date).delete()
+        db.session.commit()
+
     # First run: schedules patients
     res1 = client.post('/api/optimize', json={'algorithm': 'hybrid', 'date': target_date, 'clear_existing': True})
     assert res1.status_code == 200
@@ -572,12 +578,17 @@ def test_csv_export_formula_injection_sanitization(client):
         'required_specialization': 'Cardiology'
     })
 
-    res = client.get('/api/export/appointments/csv')
-    assert res.status_code == 200
-    csv_text = res.get_data(as_text=True)
-    # If the malicious name appeared, it must be escaped with a single quote prefix
-    if malicious_name in csv_text:
-        assert f"'{malicious_name}" in csv_text
+    try:
+        res = client.get('/api/export/appointments/csv')
+        assert res.status_code == 200
+        csv_text = res.get_data(as_text=True)
+        # If the malicious name appeared, it must be escaped with a single quote prefix
+        if malicious_name in csv_text:
+            assert f"'{malicious_name}" in csv_text
+    finally:
+        with app.app_context():
+            Patient.query.filter_by(name=malicious_name).delete()
+            db.session.commit()
 
 
 # ─── Dynamic RBAC Comprehensive Tests ──────────────────────────────────────────
