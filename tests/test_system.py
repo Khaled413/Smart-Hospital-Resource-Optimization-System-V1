@@ -17,7 +17,7 @@ os.environ['DEMO_MODE'] = 'true'
 os.environ['RATELIMIT_ENABLED'] = 'false'
 
 from app import app, limiter
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User
+from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User, Role, Permission, UserPermissionOverride
 from optimizer import (
     run_greedy, run_lp, run_hybrid, handle_emergency_preemption,
     predict_no_show_risk, run_scenario_simulation, run_optimization,
@@ -578,3 +578,251 @@ def test_csv_export_formula_injection_sanitization(client):
     # If the malicious name appeared, it must be escaped with a single quote prefix
     if malicious_name in csv_text:
         assert f"'{malicious_name}" in csv_text
+
+
+# ─── Dynamic RBAC Comprehensive Tests ──────────────────────────────────────────
+
+def test_all_routes_have_explicit_permission_protection():
+    """Verify default-deny architecture: every route must have explicit authentication or permission gating."""
+    exempt_endpoints = {'login_page', 'api_login', 'static', 'favicon'}
+    unprotected = []
+    for rule in app.url_map.iter_rules():
+        endpoint = rule.endpoint
+        if endpoint in exempt_endpoints:
+            continue
+        view_func = app.view_functions.get(endpoint)
+        if not view_func:
+            continue
+        # Verify decorated with permission or auth guard
+        is_protected = getattr(view_func, '_permission_protected', False)
+        if not is_protected:
+            unprotected.append(f"{rule.rule} -> {endpoint}")
+    assert not unprotected, f"Unprotected routes detected violating default-deny architecture: {unprotected}"
+
+
+def test_role_permission_matrix_access_control(client):
+    """Verify permission matrix enforces access control across roles."""
+    # 1. Admin has access to all protected endpoints
+    login_as(client, 'admin', 'Admin#2025!')
+    assert client.get('/api/audit-logs').status_code == 200
+    assert client.get('/api/roles').status_code == 200
+    assert client.get('/api/users').status_code == 200
+
+    # 2. Receptionist cannot view audit logs or optimize
+    login_as(client, 'receptionist', 'Reception#2025!')
+    res_audit = client.get('/api/audit-logs')
+    assert res_audit.status_code == 403
+    assert 'audit.view' in res_audit.get_json().get('required_permission', '')
+
+    res_opt = client.post('/api/optimize', json={'algorithm': 'greedy'})
+    assert res_opt.status_code == 403
+    assert 'optimization.run' in res_opt.get_json().get('required_permission', '')
+
+    # 3. Doctor cannot optimize or view audit logs, but can view patients
+    login_as(client, 'dr_sarah', 'Doctor#2025!')
+    assert client.get('/api/audit-logs').status_code == 403
+    assert client.post('/api/optimize', json={'algorithm': 'greedy'}).status_code == 403
+    assert client.get('/api/patients').status_code == 200
+
+    # 4. Demo viewer has read-only views, cannot execute state modifications
+    login_as(client, 'demo_viewer', 'DemoViewer#2025!')
+    assert client.get('/api/dashboard').status_code == 200
+    assert client.get('/api/audit-logs').status_code == 403
+    assert client.post('/api/patients', json={'name': 'Hacker'}).status_code == 403
+
+
+def test_row_level_doctor_scoping(client):
+    """Verify doctors can only view and update their own appointments."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        sarah = User.query.filter_by(username='dr_sarah').first()
+        assert sarah is not None and sarah.doctor_id is not None
+        sarah_doc_id = sarah.doctor_id
+
+        # Find another doctor's ID
+        other_doctor = Doctor.query.filter(Doctor.id != sarah_doc_id).first()
+        assert other_doctor is not None
+        other_doc_id = other_doctor.id
+
+        # Create appointment for Dr. Sarah
+        appt_sarah = Appointment(
+            patient_id=1, doctor_id=sarah_doc_id, room_id=1,
+            date="2027-01-01", start_time="09:00", end_time="09:30",
+            duration_minutes=30, status="scheduled"
+        )
+        # Create appointment for the other doctor
+        appt_other = Appointment(
+            patient_id=2, doctor_id=other_doc_id, room_id=2,
+            date="2027-01-01", start_time="10:00", end_time="10:30",
+            duration_minutes=30, status="scheduled"
+        )
+        db.session.add_all([appt_sarah, appt_other])
+        db.session.commit()
+        sarah_aid = appt_sarah.id
+        other_aid = appt_other.id
+
+    # Log in as Dr. Sarah Mitchell
+    login_as(client, 'dr_sarah', 'Doctor#2025!')
+
+    # 1. Query appointments: must only contain Dr. Sarah's appointments
+    res = client.get('/api/appointments?date=2027-01-01')
+    assert res.status_code == 200
+    appts = res.get_json()
+    returned_doc_ids = {a['doctor_id'] for a in appts}
+    assert sarah_doc_id in returned_doc_ids
+    assert other_doc_id not in returned_doc_ids
+
+    # 2. Dr. Sarah can update her own appointment
+    res_update_own = client.patch(f'/api/appointments/{sarah_aid}/status', json={'status': 'in_progress'})
+    assert res_update_own.status_code == 200
+    assert res_update_own.get_json()['status'] == 'in_progress'
+
+    # 3. Dr. Sarah cannot update another doctor's appointment (HTTP 403)
+    res_update_other = client.patch(f'/api/appointments/{other_aid}/status', json={'status': 'in_progress'})
+    assert res_update_other.status_code == 403
+
+
+def test_field_level_serialization_and_demo_masking(client):
+    """Verify clinical vitals are stripped for non-clinical roles and demo viewer masks names."""
+    # 1. Doctor Sarah (holds patients.view_clinical) receives full vitals
+    login_as(client, 'dr_sarah', 'Doctor#2025!')
+    res_doc = client.get('/api/patients')
+    assert res_doc.status_code == 200
+    doc_pats = res_doc.get_json()
+    assert len(doc_pats) > 0
+    p_doc = doc_pats[0]
+    assert p_doc['vitals'] is not None
+    assert 'bp' in p_doc['vitals']
+    assert p_doc['triage_level'] is not None
+
+    # 2. Receptionist (lacks patients.view_clinical) has vitals stripped
+    login_as(client, 'receptionist', 'Reception#2025!')
+    res_rec = client.get('/api/patients')
+    assert res_rec.status_code == 200
+    rec_pats = res_rec.get_json()
+    assert len(rec_pats) > 0
+    p_rec = rec_pats[0]
+    assert p_rec['vitals'] is None
+    assert p_rec['triage_level'] is None
+    assert 'Protected' in p_rec['condition_description']
+
+    # 3. Demo Viewer has vitals stripped AND patient names masked
+    login_as(client, 'demo_viewer', 'DemoViewer#2025!')
+    res_demo = client.get('/api/patients')
+    assert res_demo.status_code == 200
+    demo_pats = res_demo.get_json()
+    assert len(demo_pats) > 0
+    p_demo = demo_pats[0]
+    assert p_demo['vitals'] is None
+    # Verify name is masked (contains ***)
+    assert '***' in p_demo['name']
+
+
+def test_dynamic_permission_overrides_and_cache_busting(client):
+    """Verify per-user permission overrides take immediate effect without re-login."""
+    # 1. Receptionist initially denied audit logs
+    login_as(client, 'receptionist', 'Reception#2025!')
+    res1 = client.get('/api/audit-logs')
+    assert res1.status_code == 403
+
+    # 2. Admin grants 'audit.view' override to receptionist
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        rec_user = User.query.filter_by(username='receptionist').first()
+        rec_uid = rec_user.id
+
+    res_grant = client.post(f'/api/users/{rec_uid}/overrides', json={
+        'permission_key': 'audit.view',
+        'effect': 'grant',
+        'reason': 'Temporary audit inspection assignment',
+        'admin_password': 'Admin#2025!'
+    })
+    assert res_grant.status_code == 201
+
+    # 3. Switch back to receptionist: audit logs immediately accessible (HTTP 200)
+    login_as(client, 'receptionist', 'Reception#2025!')
+    res2 = client.get('/api/audit-logs')
+    assert res2.status_code == 200
+    assert isinstance(res2.get_json(), list)
+
+    # 4. Admin removes the override
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        perm = Permission.query.filter_by(key='audit.view').first()
+        perm_id = perm.id
+    res_del = client.delete(f'/api/users/{rec_uid}/overrides/{perm_id}', headers={'X-Admin-Password': 'Admin#2025!'})
+    assert res_del.status_code == 200
+
+    # 5. Receptionist immediately denied again
+    login_as(client, 'receptionist', 'Reception#2025!')
+    res3 = client.get('/api/audit-logs')
+    assert res3.status_code == 403
+
+
+def test_rbac_security_safeguards(client):
+    """Verify safeguards: step-up auth, last admin protection, self-demotion block, locked role guard."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        admin_user = User.query.filter_by(username='admin').first()
+        admin_uid = admin_user.id
+        admin_role = Role.query.filter_by(name='admin').first()
+        manager_role = Role.query.filter_by(name='manager').first()
+
+    # 1. Step-up auth required: missing or invalid password returns 401
+    res_no_pw = client.put(f'/api/users/{admin_uid}/role', json={'role_id': manager_role.id})
+    assert res_no_pw.status_code == 401
+    assert 'Step-up' in res_no_pw.get_json()['message']
+
+    res_bad_pw = client.put(f'/api/users/{admin_uid}/role', json={
+        'role_id': manager_role.id,
+        'admin_password': 'WrongPassword123!'
+    })
+    assert res_bad_pw.status_code == 401
+
+    # 2. Self-demotion safeguard: admin cannot demote self
+    res_self_demote = client.put(f'/api/users/{admin_uid}/role', json={
+        'role_id': manager_role.id,
+        'admin_password': 'Admin#2025!'
+    })
+    assert res_self_demote.status_code == 400
+    assert res_self_demote.get_json()['error'] == 'SelfDemotionBlocked'
+
+    # 3. Self-deactivation safeguard: admin cannot deactivate self
+    res_self_disable = client.patch(f'/api/users/{admin_uid}/status', json={
+        'is_active': False,
+        'admin_password': 'Admin#2025!'
+    })
+    assert res_self_disable.status_code == 400
+    assert res_self_disable.get_json()['error'] == 'SelfDisableBlocked'
+
+    # 4. Locked role guard: admin role permissions cannot be edited
+    res_edit_locked = client.put(f'/api/roles/{admin_role.id}', json={
+        'description': 'Tampered admin',
+        'permissions': ['dashboard.view'],
+        'admin_password': 'Admin#2025!'
+    })
+    assert res_edit_locked.status_code == 403
+    assert res_edit_locked.get_json()['error'] == 'RoleLocked'
+
+    # 5. System role delete guard: cannot delete system roles
+    res_del_system = client.delete(f'/api/roles/{admin_role.id}', headers={'X-Admin-Password': 'Admin#2025!'})
+    assert res_del_system.status_code == 400
+    assert res_del_system.get_json()['error'] == 'SystemRoleProtected'
+
+
+def test_seed_database_idempotency(client):
+    """Verify running seed_database() repeatedly is idempotent and preserves custom role edits."""
+    from seed_data import seed_database
+    login_as(client, 'admin', 'Admin#2025!')
+
+    # Re-run seeder
+    with app.app_context():
+        seed_database()
+
+    # Verify system roles still intact
+    res = client.get('/api/roles')
+    assert res.status_code == 200
+    roles = res.get_json()['roles']
+    role_names = {r['name'] for r in roles}
+    assert {'admin', 'manager', 'doctor', 'receptionist', 'demo_viewer'}.issubset(role_names)
+
