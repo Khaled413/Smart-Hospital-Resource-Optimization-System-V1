@@ -269,29 +269,59 @@ async function submitEmergencyWalkin(e) {
   }
 }
 
-// ── Auth Status Check ─────────────────────────────────────────
+// ── Auth Status Check & Dynamic Permission Gating ─────────────
+window.currentUser = null;
+window.currentUserPermissions = new Set();
+
+window.can = function(permissionKey) {
+  if (!window.currentUserPermissions) return false;
+  return window.currentUserPermissions.has(permissionKey);
+};
+
+function applyPermissionGating() {
+  document.querySelectorAll('[data-perm]').forEach(el => {
+    const requiredPerm = el.getAttribute('data-perm');
+    if (requiredPerm && !window.can(requiredPerm)) {
+      el.style.display = 'none';
+      if (el.tagName === 'BUTTON' || el.tagName === 'INPUT') {
+        el.disabled = true;
+      }
+    }
+  });
+}
+
 async function checkAuthStatus() {
   const container = document.getElementById('auth-status-container');
-  if (!container) return;
 
   try {
     const res = await API.get('/api/auth/me');
     if (res.authenticated && res.user) {
       const u = res.user;
-      container.innerHTML = `
-        <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);padding:4px 10px;border-radius:20px;font-size:12px">
-          <span>👤</span>
-          <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
-          <span class="badge" style="background:#1a56db;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
-          <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-left:4px" title="Sign Out">✕</button>
-        </div>
-      `;
+      window.currentUser = u;
+      window.currentUserPermissions = new Set(res.permissions || []);
+      applyPermissionGating();
+
+      if (container) {
+        container.innerHTML = `
+          <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);padding:4px 10px;border-radius:20px;font-size:12px">
+            <span>👤</span>
+            <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
+            <span class="badge" style="background:#1a56db;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
+            <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-left:4px" title="Sign Out">✕</button>
+          </div>
+        `;
+      }
     } else {
-      container.innerHTML = `
-        <a href="/login" class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 10px">
-          🔑 Sign In
-        </a>
-      `;
+      window.currentUser = null;
+      window.currentUserPermissions = new Set();
+      applyPermissionGating();
+      if (container) {
+        container.innerHTML = `
+          <a href="/login" class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 10px">
+            🔑 Sign In
+          </a>
+        `;
+      }
     }
   } catch(e) {
     console.error('Auth check error', e);
@@ -327,6 +357,9 @@ const TRANSLATIONS = {
     nav_optimize: 'AI Optimization',
     nav_simulator: 'Crisis Simulator',
     nav_history: 'Run History',
+    nav_access_control: 'Access Control',
+    nav_roles: 'Roles & Permissions',
+    nav_users: 'Staff & Users',
     nav_display: 'Waiting Hall Monitor',
     btn_emergency: 'Code Red Walk-In',
     emergency_modal_title: 'Emergency Code Red Walk-In',
@@ -354,6 +387,9 @@ const TRANSLATIONS = {
     nav_optimize: 'خوارزميات التحسين',
     nav_simulator: 'محاكي الأزمات',
     nav_history: 'سجل العمليات',
+    nav_access_control: 'الأدوار والصلاحيات',
+    nav_roles: 'الأدوار ومصفوفة الصلاحيات',
+    nav_users: 'الكادر والمستخدمين',
     nav_display: 'شاشة صالة الانتظار',
     btn_emergency: 'طوارئ كود أحمر',
     emergency_modal_title: 'تسجيل حالة طوارئ حرجة (كود أحمر)',

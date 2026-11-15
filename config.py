@@ -45,6 +45,9 @@ class Config:
     # Timezone Configuration
     APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'Africa/Cairo')
     
+    # Demo Mode (Restricted read-only demo viewer)
+    DEMO_MODE = os.environ.get('DEMO_MODE', 'false').lower() in ('true', '1', 'yes')
+
     # Hospital Operational Parameters
     DEFAULT_CLEANING_BUFFER = int(os.environ.get('DEFAULT_CLEANING_BUFFER', 10))  # minutes between appointments
     DEFAULT_EMERGENCY_ESI = int(os.environ.get('DEFAULT_EMERGENCY_ESI', 1))        # Level 1 = Resuscitation / Code Red

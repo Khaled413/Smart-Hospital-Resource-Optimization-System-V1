@@ -209,73 +209,103 @@ vercel
 
 ---
 
-## 🔑 User Accounts & Access Control (RBAC)
+## 🔑 Dynamic Database-Driven RBAC & Permissions Architecture
 
-The system enforces strict Role-Based Access Control across all views and API endpoints with session-based authentication, CSRF tokens, and login rate limiting (5 attempts/min).
+The system implements a granular, database-driven **Role-Based Access Control (RBAC)** architecture governed by an authoritative 36-permission catalog across 18 clinical and operational resource domains.
 
-Navigate to **`http://127.0.0.1:5000/login`** (or use the one-click quick autofill buttons):
+### 🛡️ Core RBAC Tenets:
+1. **Default-Deny Architecture**: Every route and API endpoint is explicitly guarded by `@require_permission('<resource>.<action>')` or `@require_any([...])`. Unauthenticated access yields HTTP 401; unauthorized access yields HTTP 403.
+2. **Dynamic UI & API Synchrony**: UI elements, sidebar navigation, and action buttons are gated via Jinja `can('...')` filters and frontend `[data-perm]` attributes synchronized with the backend. Backend remains the authoritative enforcement point.
+3. **Database-Driven Role & Catalog Management**: Administrators can dynamically modify permissions assigned to roles or create custom roles directly from the `/roles` UI panel. Changes take immediate effect via version-based cache-invalidation (`Role.version`, `User.permissions_version`).
+4. **Per-User Permission Overrides**: Granular exceptions (explicit `grant` or `deny`) can be assigned to individual user accounts from the `/users` panel. Deny overrides strictly supersede role permissions.
+5. **Row-Level & Field-Level Data Scoping**:
+   - **Row-Level**: Physicians (`doctor` role) are scoped to view and update only their own assigned clinical appointments.
+   - **Field-Level**: Patient vitals and diagnostic summaries are masked for non-clinical staff. Under demo mode (`DEMO_MODE=true`), patient names and PII are automatically anonymized (`to_dict(viewer)`).
+6. **Administrative Safeguards & Step-Up Auth**:
+   - System roles and locked administrator accounts cannot be deleted or rendered permissionless.
+   - Self-demotion from Administrator and account self-deactivation are strictly blocked.
+   - Deleting or demoting the last active administrator is prevented (`LastAdminProtected`).
+   - Sensitive role permission modifications require Step-Up password confirmation (`X-Admin-Password`).
 
-| Role | Username | Default Password | Operational Access Matrix |
+### 👥 System Roles & Initial Credentials
+
+Initial administrative and staff passwords can be configured via environment variables (`ADMIN_INITIAL_PASSWORD`, `MANAGER_INITIAL_PASSWORD`, `DOCTOR_INITIAL_PASSWORD`, `RECEPTIONIST_INITIAL_PASSWORD`). If unconfigured, a cryptographically secure random password is generated at seed time:
+
+| Role | Username | Initial Password | Effective Permissions & Scope |
 | :--- | :--- | :--- | :--- |
-| **👑 Super Admin** | `admin` | `Admin#2025!` | Full platform administration, RBAC assignment, audit logs, resource deletion |
-| **🏢 Operations Director** | `manager` | `Manager#2025!` | Bed admissions, medical fleets, optimization engine, crisis simulator, CSV export |
-| **👨‍⚕️ Physician** | `dr_sarah` | `Doctor#2025!` | View department schedule, update **own** appointments' status, clinical notes & prescriptions |
-| **📋 Receptionist** | `receptionist` | `Reception#2025!` | Outpatient registration, appointments directory, Code Red emergency walk-in intake, bed occupancy |
-
-> [!NOTE]
-> All credentials can be customized via `.env` (`ADMIN_INITIAL_PASSWORD`, `DOCTOR_INITIAL_PASSWORD`, etc.).
+| **👑 Super Admin** (`admin`) | `admin` | `Admin#2025!` | Full platform administration, dynamic RBAC management (`/roles`, `/users`), audit logs, resource deletion |
+| **🏢 Operations Director** (`manager`) | `manager` | `Manager#2025!` | Bed admissions, equipment fleet management, optimization solver, crisis simulator, CSV export |
+| **👨‍⚕️ Physician** (`dr_sarah`) | `dr_sarah` | `Doctor#2025!` | View department schedule, update **own** consultations, clinical notes & prescriptions, inpatient bed admission |
+| **📋 Receptionist** (`receptionist`) | `receptionist` | `Reception#2025!` | Outpatient registration, appointments directory, Code Red emergency walk-in intake, bed occupancy |
+| **👁️ Demo Viewer** (`demo_viewer`) | `demo_viewer` | `DemoViewer#2025!` | Read-only visitor access (enabled when `DEMO_MODE=true`), clinical PII anonymized |
 
 ---
 
 ## 🛡️ Security & Enterprise Hardening
 
-* **Authentication & RBAC**: Every `/api/*` endpoint is guarded by `login_required` and role-specific `role_required` decorators. Doctors cannot tamper with other doctors' appointments.
-* **Rate Limiting**: `Flask-Limiter` protects authentication against brute-force attacks (`5 requests/minute`).
-* **CSRF Defense**: Double-submit cookie & header token pattern (`X-CSRF-Token`) verified on state-changing methods (`POST`, `PUT`, `PATCH`, `DELETE`).
-* **Spreadsheet Formula Injection Protection**: Exported CSV cells starting with `=, +, -, @, \t, \r` are automatically escaped.
-* **Cookie & Header Hardening**: `HttpOnly`, `SameSite=Lax`, CSP, `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`.
+* **Authentication & Dynamic RBAC**: Every single `/api/*` route is verified for explicit permission gating. Doctors cannot access or tamper with other doctors' appointments.
+* **Brute-Force Rate Limiting**: `Flask-Limiter` protects authentication against brute-force attacks (`5 requests/minute` per IP/account) with automatic account lockout after 5 consecutive failures.
+* **Server-Side CSRF Defense**: Double-submit cookie & header token pattern (`X-CSRF-Token`) validated server-side on state-changing methods (`POST`, `PUT`, `PATCH`, `DELETE`).
+* **Spreadsheet Formula Injection Sanitization**: Exported CSV cells starting with `=, +, -, @, \t, \r` are automatically escaped with single quotes.
+* **Hardened Security Headers & Cookies**: `HttpOnly`, `SameSite=Lax`, strict CSP, `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy`.
 * **State Machine Validation**: Appointment statuses follow clinical lifecycle validation (`scheduled` -> `in_progress` -> `completed` / `cancelled`); terminal states cannot be illegally reversed.
-* **Deletion Safeguards**: Resources with active scheduled appointments cannot be silently deleted, preventing accidental medical record data loss.
+* **Deletion Safeguards**: Resources with active scheduled appointments cannot be deleted, preventing accidental clinical record loss.
 
 ---
 
 ## 🌐 API Endpoints Reference
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/api/auth/login` | Session authentication |
-| `POST` | `/api/auth/logout` | Session termination |
-| `GET` | `/api/auth/me` | Fetch active authenticated user profile |
-| `GET` | `/api/dashboard` | Aggregated hospital KPIs & utilization stats |
-| `GET/POST` | `/api/patients` | Retrieve patient directory or register new patient |
-| `PUT/DELETE`| `/api/patients/<id>` | Update patient record or remove |
-| `POST` | `/api/emergency/walkin` | **Trigger Code Red walk-in with preemption engine** |
-| `GET/POST` | `/api/doctors` | List doctors or add physician profile |
-| `GET/POST` | `/api/rooms` | Manage hospital rooms and capacity |
-| `GET/POST` | `/api/beds` | Inpatient bed inventory |
-| `POST` | `/api/beds/<id>/admit` | Admit patient to specific bed |
-| `POST` | `/api/beds/<id>/discharge`| Discharge patient and trigger bed cleaning state |
-| `GET/POST` | `/api/equipment` | Medical devices and calibration tracking |
-| `GET` | `/api/appointments` | Filterable consultation schedule |
-| `PATCH`| `/api/appointments/<id>/status`| Update status, clinical notes, and prescriptions |
-| `POST` | `/api/optimize` | Execute PuLP Linear Programming / Greedy optimizer |
-| `POST` | `/api/simulation/run` | Execute crisis "What-If" stress simulation |
-| `GET` | `/api/export/appointments/csv`| Export appointment roster to CSV file |
-| `GET` | `/api/audit-logs` | Retrieve persistent security & audit event logs |
+| Method | Endpoint | Required Permission | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/auth/login` | *Public* | Session authentication with lockout defense |
+| `POST` | `/api/auth/logout` | *Public* | Session termination |
+| `GET` | `/api/auth/me` | *Authenticated* | Fetch active user profile, effective role, and permissions |
+| `POST` | `/api/auth/change-password` | *Authenticated* | Update user account password |
+| `GET` | `/api/dashboard` | `dashboard.view` | Aggregated hospital KPIs & utilization stats |
+| `GET/POST` | `/api/patients` | `patients.view` / `patients.create` | Retrieve patient directory or register new patient |
+| `PUT/DELETE`| `/api/patients/<id>` | `patients.update` / `patients.delete` | Update patient record or remove |
+| `POST` | `/api/emergency/walkin` | `emergency.trigger` | **Trigger Code Red walk-in with preemption engine** |
+| `GET/POST` | `/api/doctors` | `doctors.view` / `doctors.manage` | List doctors or add physician profile |
+| `GET/POST` | `/api/rooms` | `rooms.view` / `rooms.manage` | Manage hospital rooms and capacity |
+| `GET/POST` | `/api/beds` | `beds.view` / `beds.manage` | Inpatient bed inventory |
+| `POST` | `/api/beds/<id>/admit` | `beds.admit_discharge` | Admit patient to specific bed |
+| `POST` | `/api/beds/<id>/discharge`| `beds.admit_discharge` | Discharge patient and trigger bed cleaning state |
+| `GET/POST` | `/api/equipment` | `equipment.view` / `equipment.manage` | Medical devices and calibration tracking |
+| `GET` | `/api/appointments` | `appointments.view` | Filterable consultation schedule (row-scoped for doctors) |
+| `PATCH`| `/api/appointments/<id>/status`| `appointments.update_status` | Update status, clinical notes, and prescriptions |
+| `POST` | `/api/optimize` | `optimization.run` | Execute PuLP Linear Programming / Greedy optimizer |
+| `POST` | `/api/simulation/run` | `simulation.run` | Execute crisis "What-If" stress simulation |
+| `GET` | `/api/export/appointments/csv`| `export.csv` | Export appointment roster to sanitized CSV |
+| `GET` | `/api/audit-logs` | `audit.view` | Retrieve persistent security & audit event logs |
+| `GET/POST` | `/api/roles` | `roles.view` / `roles.manage` | View permission catalog or create custom role |
+| `GET/PUT/DELETE`| `/api/roles/<id>` | `roles.view` / `roles.manage` | Inspect, update permissions, or delete role |
+| `GET/POST` | `/api/users` | `users.view` / `users.manage` | List users or create new staff user |
+| `PUT` | `/api/users/<id>/role` | `users.manage` | Update user assigned role |
+| `PATCH`| `/api/users/<id>/status` | `users.manage` | Activate or deactivate staff account |
+| `POST` | `/api/users/<id>/overrides`| `roles.manage` | Set granular per-user grant/deny permission override |
+| `DELETE`| `/api/users/<id>/overrides/<pid>`| `roles.manage` | Revoke per-user permission override |
 
 ---
 
 ## 🧪 Automated Testing Suite
 
-The system includes a dedicated unit and integration test suite using `pytest`:
+The system includes a comprehensive unit, integration, and security test suite using `pytest`:
 
 ```bash
 python -m pytest tests/test_system.py -v
 ```
 
-### Verified Test Cases:
-* `test_user_authentication`: Password hashing, session security, and unauthorized access blocks.
-* `test_no_show_prediction`: Machine learning clinical risk heuristics.
+### Verified Test Cases (31/31 Passing):
+* `test_all_routes_have_explicit_permission_protection`: Iterates over 100% of Flask routes in `app.url_map` to verify non-exempt routes are actively permission-protected.
+* `test_role_permission_matrix_access_control`: Validates permission boundaries for admin, manager, doctor, receptionist, and demo viewer.
+* `test_row_level_doctor_scoping`: Verifies doctors can only view and update their own assigned consultations.
+* `test_field_level_serialization_and_demo_masking`: Verifies clinical vitals are stripped for non-clinical roles and patient PII is anonymized for demo guests.
+* `test_dynamic_permission_overrides_and_cache_busting`: Verifies user-level grant/deny overrides take immediate effect without session invalidation.
+* `test_rbac_security_safeguards`: Enforces step-up authentication, last administrator protection, locked role integrity, and self-demotion blocks.
+* `test_seed_database_idempotency`: Verifies database seeder updates catalog idempotently without wiping customizations.
+* `test_account_lockout_after_multiple_failed_logins`: Ensures 5 failed attempts locks user out for 15 minutes.
+* `test_security_headers_present`: Verifies CSP, X-Frame-Options, X-Content-Type-Options, and Referrer-Policy headers.
+* `test_csv_export_formula_injection_sanitization`: Verifies formula injection characters are escaped.
 * `test_optimizer_algorithms`: Correctness and non-emptiness of LP, Greedy, and Hybrid solvers.
 * `test_emergency_code_red_preemption`: Preemption mechanism and slot shifting under full capacity.
 * `test_bed_management_api`: Complete admission, occupancy, and discharge-to-cleaning cycle.

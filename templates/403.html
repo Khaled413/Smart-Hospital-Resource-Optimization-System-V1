@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}403 Forbidden — MediOptim Pro{% endblock %}
+
+{% block content %}
+<div class="content-body" style="display:flex;align-items:center;justify-content:center;min-height:60vh;">
+  <div class="card" style="max-width:550px;width:100%;text-align:center;padding:40px 30px;box-shadow:var(--shadow-md);border-radius:12px;">
+    <div style="font-size:64px;margin-bottom:16px;">🛡️</div>
+    <h2 style="color:var(--danger,#dc2626);margin-bottom:10px;font-size:24px;">403 — Access Denied / غير مصرح بالدخول</h2>
+    <p style="color:var(--text-muted);font-size:15px;margin-bottom:20px;line-height:1.6;">
+      You do not have the required permission to access this resource or perform this action.
+      <br>
+      ليس لديك الصلاحية الكافية للوصول إلى هذه الصفحة أو تنفيذ هذا الإجراء.
+    </p>
+    {% if required_permission %}
+    <div style="background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:8px;font-size:13px;font-family:monospace;display:inline-block;margin-bottom:24px;">
+      Required Permission: <strong>{{ required_permission }}</strong>
+    </div>
+    {% endif %}
+    <div style="display:flex;gap:12px;justify-content:center;margin-top:10px;">
+      <a href="/" class="btn btn-primary" style="padding:10px 20px;">
+        <span class="btn-icon">📊</span> Return to Dashboard / العودة للرئيسية
+      </a>
+      <a href="/login" class="btn btn-outline" style="padding:10px 20px;">
+        <span class="btn-icon">🔄</span> Switch Account / تبديل الحساب
+      </a>
+    </div>
+  </div>
+</div>
+{% endblock %}

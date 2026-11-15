@@ -4,8 +4,8 @@ Includes Authentication, RBAC, Bed Management, Equipment Tracking, Emergency Cod
 Crisis Simulation, Export, and Optimization Services.
 """
 
-from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response, send_from_directory
-from datetime import datetime, date
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response, send_from_directory, g
+from datetime import datetime, date, timedelta
 import csv
 import io
 import os
@@ -20,7 +20,12 @@ from sqlalchemy.exc import IntegrityError
 from config import get_config, config_by_name
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment,
-    Appointment, OptimizationRun, User, AuditLog
+    Appointment, OptimizationRun, User, AuditLog,
+    Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name
+)
+from permissions import (
+    PERMISSION_CATALOG, PERMISSION_MAP, PERMISSION_GROUPS,
+    DEFAULT_ROLE_PERMISSIONS, get_permissions_by_group, get_all_permissions
 )
 from optimizer import (
     run_optimization, handle_emergency_preemption,
@@ -82,6 +87,19 @@ db.init_app(app)
 
 with app.app_context():
     try:
+        # Lightweight schema migration for SQLite columns
+        try:
+            with db.engine.connect() as conn:
+                res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
+                cols = [r[1] for r in res]
+                if cols:
+                    if 'role_id' not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN role_id INTEGER REFERENCES roles(id)"))
+                    if 'permissions_version' not in cols:
+                        conn.execute(db.text("ALTER TABLE users ADD COLUMN permissions_version INTEGER DEFAULT 1"))
+                    conn.commit()
+        except Exception:
+            pass
         db.create_all()
         seed_database()
     except Exception as e:
@@ -186,36 +204,244 @@ def get_current_date():
 
 
 def get_current_user():
+    """Return the currently authenticated User instance or None."""
+    if hasattr(g, 'current_user'):
+        return g.current_user
     user_id = session.get('user_id')
-    if user_id:
-        return db.session.get(User, user_id)
-    return None
+    if not user_id:
+        g.current_user = None
+        return None
+    user = db.session.get(User, user_id)
+    if not user or not user.is_active:
+        g.current_user = None
+        return None
+    g.current_user = user
+    return user
+
+
+def get_user_effective_permissions(user):
+    """
+    Return effective permission set for user, cached in flask.g.
+    Invalidates immediately on permissions_version or role version changes.
+    """
+    if not user or not user.is_active:
+        return set()
+
+    cache_key = f"_eff_perms_{user.id}"
+    version_key = f"_eff_version_{user.id}"
+    role_ver = user.assigned_role.version if user.assigned_role else 1
+    current_ver = (user.permissions_version, role_ver)
+
+    if hasattr(g, cache_key) and getattr(g, version_key, None) == current_ver:
+        return getattr(g, cache_key)
+
+    perms = user.get_effective_permissions()
+    setattr(g, cache_key, perms)
+    setattr(g, version_key, current_ver)
+    return perms
+
+
+def user_has_permission(user, permission_key: str) -> bool:
+    """Check if user holds the given permission key."""
+    if not user or not user.is_active:
+        return False
+    perms = get_user_effective_permissions(user)
+    return permission_key in perms
 
 
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user_id' not in session or not get_current_user():
+        user = get_current_user()
+        if not user:
             if request.path.startswith('/api/'):
-                return jsonify({'error': 'Authentication required. Please sign in.'}), 401
+                return jsonify({'error': 'Unauthorized', 'message': 'Authentication required. Please sign in.'}), 401
             next_url = request.full_path if request.query_string else request.path
             return redirect(url_for('login_page', next=next_url))
+        if not user.is_active:
+            session.clear()
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'AccountDisabled', 'message': 'Account is deactivated.'}), 403
+            return redirect(url_for('login_page'))
         return f(*args, **kwargs)
+    decorated_function._permission_protected = True
     return decorated_function
 
 
-def role_required(allowed_roles):
+def require_permission(perm_key: str):
+    """
+    Enforces that current authenticated user has the specified permission key.
+    Returns 401 if unauthenticated, 403 if unauthorized or disabled.
+    """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            if 'user_id' not in session or not get_current_user():
-                return jsonify({'error': 'Authentication required. Please sign in.'}), 401
-            user_role = session.get('role', 'receptionist')
-            if user_role not in allowed_roles:
-                return jsonify({'error': f'Access denied. Required roles: {", ".join(allowed_roles)}'}), 403
+            user = get_current_user()
+            if not user:
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Unauthorized', 'message': 'Authentication required. Please sign in.'}), 401
+                next_url = request.full_path if request.query_string else request.path
+                return redirect(url_for('login_page', next=next_url))
+
+            if not user.is_active:
+                session.clear()
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'AccountDisabled', 'message': 'Account is deactivated.'}), 403
+                return redirect(url_for('login_page'))
+
+            if not user_has_permission(user, perm_key):
+                if request.path.startswith('/api/'):
+                    return jsonify({
+                        'error': 'Forbidden',
+                        'required_permission': perm_key,
+                        'message': f'Access denied. Missing required permission: {perm_key}'
+                    }), 403
+                return render_template('403.html', required_permission=perm_key), 403
+
             return f(*args, **kwargs)
+        decorated_function._permission_protected = True
+        decorated_function._required_permission = perm_key
         return decorated_function
     return decorator
+
+
+def require_any(perm_keys: list):
+    """
+    Enforces that current authenticated user has AT LEAST ONE of the specified permission keys.
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            user = get_current_user()
+            if not user:
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Unauthorized', 'message': 'Authentication required. Please sign in.'}), 401
+                next_url = request.full_path if request.query_string else request.path
+                return redirect(url_for('login_page', next=next_url))
+
+            if not user.is_active:
+                session.clear()
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'AccountDisabled', 'message': 'Account is deactivated.'}), 403
+                return redirect(url_for('login_page'))
+
+            user_perms = get_user_effective_permissions(user)
+            if not any(k in user_perms for k in perm_keys):
+                if request.path.startswith('/api/'):
+                    return jsonify({
+                        'error': 'Forbidden',
+                        'required_any_permissions': perm_keys,
+                        'message': f'Access denied. One of permissions required: {", ".join(perm_keys)}'
+                    }), 403
+                return render_template('403.html', required_permission=' / '.join(perm_keys)), 403
+
+            return f(*args, **kwargs)
+        decorated_function._permission_protected = True
+        decorated_function._required_any_permissions = perm_keys
+        return decorated_function
+    return decorator
+
+
+def role_required(allowed_roles):
+    """Legacy role check fallback maintaining full backwards-compatibility."""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            user = get_current_user()
+            if not user:
+                return jsonify({'error': 'Unauthorized', 'message': 'Authentication required. Please sign in.'}), 401
+            effective_role = user.get_role_name()
+            if effective_role not in allowed_roles:
+                return jsonify({'error': f'Access denied. Required roles: {", ".join(allowed_roles)}'}), 403
+            return f(*args, **kwargs)
+        decorated_function._permission_protected = True
+        decorated_function._allowed_roles = allowed_roles
+        return decorated_function
+    return decorator
+
+
+def verify_step_up_auth(user):
+    """
+    Requires the current user to re-enter their current password for sensitive operations.
+    Accepts password via 'X-Admin-Password' header or 'admin_password' / 'confirm_password' in request body.
+    """
+    if not user:
+        return False, "Authentication required"
+
+    pw = request.headers.get('X-Admin-Password')
+    if not pw and request.is_json:
+        data = request.get_json(silent=True) or {}
+        pw = data.get('admin_password') or data.get('confirm_password') or data.get('current_password')
+    if not pw and request.form:
+        pw = request.form.get('admin_password') or request.form.get('confirm_password')
+
+    if not pw:
+        return False, "Step-up authentication required: Please confirm your password to perform this sensitive action."
+
+    if not user.check_password(pw):
+        return False, "Step-up authentication failed: Current password is incorrect."
+
+    return True, None
+
+
+def scoped_query(model, viewer=None):
+    """
+    Returns an SQLAlchemy query filtered by the viewer's data-level permissions.
+    - If viewer has <resource>.view_all: returns unfiltered model query.
+    - If viewer only has <resource>.view without view_all (e.g. Doctor):
+      filters to records assigned to viewer.doctor_id.
+    - If viewer lacks view permission: returns empty query (filter(false())).
+    """
+    if viewer is None:
+        viewer = get_current_user()
+
+    if not viewer or not viewer.is_active:
+        return model.query.filter(db.false())
+
+    if model == Patient:
+        if user_has_permission(viewer, 'patients.view_all'):
+            return Patient.query
+        elif user_has_permission(viewer, 'patients.view'):
+            if viewer.doctor_id:
+                doc_patient_ids = [
+                    r[0] for r in db.session.query(Appointment.patient_id)
+                    .filter(Appointment.doctor_id == viewer.doctor_id).distinct().all()
+                ]
+                return Patient.query.filter(Patient.id.in_(doc_patient_ids))
+            return Patient.query
+        else:
+            return Patient.query.filter(db.false())
+
+    elif model == Appointment:
+        if user_has_permission(viewer, 'appointments.view_all'):
+            return Appointment.query
+        elif user_has_permission(viewer, 'appointments.view'):
+            if viewer.doctor_id:
+                return Appointment.query.filter(Appointment.doctor_id == viewer.doctor_id)
+            return Appointment.query
+        else:
+            return Appointment.query.filter(db.false())
+
+    return model.query
+
+
+@app.context_processor
+def inject_rbac_helpers():
+    user = get_current_user()
+    user_perms = get_user_effective_permissions(user) if user else set()
+
+    def can(perm_key):
+        return perm_key in user_perms
+
+    def can_any(keys):
+        return any(k in user_perms for k in keys)
+
+    return dict(
+        current_user=user,
+        can=can,
+        can_any=can_any,
+        user_permissions=sorted(list(user_perms))
+    )
 
 
 def log_audit(action, resource_type, resource_id=None, details=''):
@@ -239,7 +465,7 @@ def log_audit(action, resource_type, resource_id=None, details=''):
 # ─── Frontend Template Routes ─────────────────────────────────────────────────
 
 @app.route('/')
-@login_required
+@require_permission('dashboard.view')
 def index():
     return render_template('index.html')
 
@@ -250,77 +476,128 @@ def login_page():
     return render_template('login.html')
 
 @app.route('/patients')
-@login_required
+@require_permission('patients.view')
 def patients_page():
     return render_template('patients.html')
 
 @app.route('/doctors')
-@login_required
+@require_permission('doctors.view')
 def doctors_page():
     return render_template('doctors.html')
 
 @app.route('/rooms')
-@login_required
+@require_permission('rooms.view')
 def rooms_page():
     return render_template('rooms.html')
 
 @app.route('/departments')
-@login_required
+@require_permission('departments.view')
 def departments_page():
     return render_template('departments.html')
 
 @app.route('/appointments')
-@login_required
+@require_permission('appointments.view')
 def appointments_page():
     return render_template('appointments.html')
 
 @app.route('/optimize')
-@login_required
+@require_any(['optimization.run', 'optimization.history.view'])
 def optimize_page():
     return render_template('optimize.html')
 
 @app.route('/analytics')
-@login_required
+@require_permission('analytics.view')
 def analytics_page():
     return render_template('analytics.html')
 
 @app.route('/history')
-@login_required
+@require_permission('optimization.history.view')
 def history_page():
     return render_template('history.html')
 
 @app.route('/beds')
-@login_required
+@require_permission('beds.view')
 def beds_page():
     return render_template('beds.html')
 
 @app.route('/equipment')
-@login_required
+@require_permission('equipment.view')
 def equipment_page():
     return render_template('equipment.html')
 
 @app.route('/simulator')
-@login_required
+@require_permission('simulation.run')
 def simulator_page():
     return render_template('simulator.html')
 
 @app.route('/queue-display')
-@login_required
+@require_permission('queue_display.view')
 def queue_display_page():
     return render_template('queue_display.html')
+
+@app.route('/roles')
+@require_permission('roles.view')
+def roles_page():
+    return render_template('roles.html')
+
+@app.route('/users')
+@require_permission('users.view')
+def users_page():
+    return render_template('users.html')
+
+@app.route('/change-password')
+@login_required
+def change_password_page():
+    return render_template('change_password.html')
 
 
 # ─── API: Authentication ──────────────────────────────────────────────────────
 
+def login_limit_key():
+    data = request.get_json(silent=True) or {}
+    u = str(data.get('username', '')).strip().lower()
+    ip = get_remote_address()
+    return f"{ip}:{u}"
+
+
 @app.route('/api/auth/login', methods=['POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=login_limit_key)
 def api_login():
     data = request.get_json() or {}
     username = data.get('username', '').strip()
     password = data.get('password', '')
 
     user = User.query.filter((User.username == username) | (User.email == username)).first()
-    if not user or not user.check_password(password):
+    if user:
+        # Check if account is temporarily locked
+        if user.locked_until and user.locked_until > datetime.utcnow():
+            mins_left = max(1, int((user.locked_until - datetime.utcnow()).total_seconds() / 60))
+            return jsonify({
+                'error': f'Account is temporarily locked due to multiple failed login attempts. Try again in {mins_left} minute(s).'
+            }), 403
+
+        if not getattr(user, 'is_active', True):
+            return jsonify({'error': 'Account has been disabled. Contact system administrator.'}), 403
+
+        if not user.check_password(password):
+            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+            if user.failed_login_attempts >= 5:
+                user.locked_until = datetime.utcnow() + timedelta(minutes=15)
+                db.session.commit()
+                log_audit('LOCKOUT', 'user', user.id, f"User {user.username} locked out after 5 consecutive failed login attempts")
+                return jsonify({
+                    'error': 'Account has been temporarily locked for 15 minutes due to 5 consecutive failed login attempts.'
+                }), 403
+            db.session.commit()
+            log_audit('LOGIN_FAILED', 'user', user.id, f"Failed login attempt ({user.failed_login_attempts}/5) for {user.username}")
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+        # Successful login: reset failed attempts
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.session.commit()
+    else:
+        log_audit('LOGIN_FAILED', 'user', None, f"Failed login attempt for non-existent user: {username}")
         return jsonify({'error': 'Invalid username or password'}), 401
 
     session['user_id'] = user.id
@@ -347,8 +624,16 @@ def api_logout():
 def api_me():
     user = get_current_user()
     if user:
-        return jsonify({'authenticated': True, 'user': user.to_dict()})
-    return jsonify({'authenticated': False, 'user': None})
+        perms = sorted(list(get_user_effective_permissions(user)))
+        return jsonify({
+            'authenticated': True,
+            'user': user.to_dict(include_permissions=True),
+            'role': user.get_role_name(),
+            'permissions': perms,
+            'permissions_version': user.permissions_version
+        })
+    return jsonify({'authenticated': False, 'user': None, 'permissions': []})
+api_me._permission_protected = True
 
 
 @app.route('/api/auth/change-password', methods=['POST'])
@@ -385,8 +670,7 @@ def api_change_password():
 # ─── API: Dashboard ───────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard')
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('dashboard.view')
 def api_dashboard():
     today = get_current_date()
     total_patients = Patient.query.count()
@@ -460,23 +744,23 @@ def api_dashboard():
 # ─── API: Patients ────────────────────────────────────────────────────────────
 
 @app.route('/api/patients', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('patients.view')
 def api_patients():
+    user = get_current_user()
     search = request.args.get('search', '').strip().lower()
     priority = request.args.get('priority', '')
-    query = Patient.query.options(joinedload(Patient.appointments))
+    query = scoped_query(Patient, user).options(joinedload(Patient.appointments))
     if search:
         query = query.filter(Patient.name.ilike(f'%{search}%'))
     if priority:
         query = query.filter_by(priority=priority)
-    return jsonify([p.to_dict() for p in query.order_by(Patient.registered_at.desc()).all()])
+    return jsonify([p.to_dict(viewer=user) for p in query.order_by(Patient.registered_at.desc()).all()])
 
 
 @app.route('/api/patients', methods=['POST'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('patients.create')
 def api_add_patient():
+    user = get_current_user()
     data = request.get_json() or {}
     if not data.get('name'):
         return jsonify({'error': 'Patient name is required'}), 400
@@ -505,14 +789,24 @@ def api_add_patient():
     db.session.commit()
 
     log_audit('CREATE', 'patient', patient.id, f"Registered patient {patient.name} ({patient.priority})")
-    return jsonify(patient.to_dict()), 201
+    return jsonify(patient.to_dict(viewer=user)), 201
 
 
 @app.route('/api/patients/<int:pid>', methods=['PUT'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('patients.update')
 def api_update_patient(pid):
+    user = get_current_user()
     patient = db.get_or_404(Patient, pid)
+
+    # Row-level guard: if not view_all and doctor, ensure patient belongs to doctor
+    if not user_has_permission(user, 'patients.view_all') and user.doctor_id:
+        doc_patient_ids = [
+            r[0] for r in db.session.query(Appointment.patient_id)
+            .filter(Appointment.doctor_id == user.doctor_id).distinct().all()
+        ]
+        if pid not in doc_patient_ids:
+            return jsonify({'error': 'Forbidden', 'message': 'You cannot update patients outside your care.'}), 403
+
     data = request.get_json() or {}
     for field in ['name', 'age', 'gender', 'required_specialization',
                   'condition_description', 'preferred_date',
@@ -532,12 +826,11 @@ def api_update_patient(pid):
     patient.no_show_risk = predict_no_show_risk(patient)
     db.session.commit()
     log_audit('UPDATE', 'patient', patient.id, f"Updated patient {patient.name}")
-    return jsonify(patient.to_dict())
+    return jsonify(patient.to_dict(viewer=user))
 
 
 @app.route('/api/patients/<int:pid>', methods=['DELETE'])
-@login_required
-@role_required(['admin'])
+@require_permission('patients.delete')
 def api_delete_patient(pid):
     patient = db.get_or_404(Patient, pid)
     active_count = Appointment.query.filter(
@@ -565,8 +858,7 @@ def api_delete_patient(pid):
 # ─── API: Doctors ─────────────────────────────────────────────────────────────
 
 @app.route('/api/doctors', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('doctors.view')
 def api_doctors():
     today_iso = get_current_date()
     appt_counts = dict(
@@ -579,8 +871,7 @@ def api_doctors():
 
 
 @app.route('/api/doctors', methods=['POST'])
-@login_required
-@role_required(['admin'])
+@require_permission('doctors.manage')
 def api_add_doctor():
     data = request.get_json() or {}
     if not data.get('name'):
@@ -600,8 +891,7 @@ def api_add_doctor():
 
 
 @app.route('/api/doctors/<int:did>', methods=['PUT'])
-@login_required
-@role_required(['admin'])
+@require_permission('doctors.manage')
 def api_update_doctor(did):
     doctor = db.get_or_404(Doctor, did)
     data = request.get_json() or {}
@@ -618,8 +908,7 @@ def api_update_doctor(did):
 
 
 @app.route('/api/doctors/<int:did>', methods=['DELETE'])
-@login_required
-@role_required(['admin'])
+@require_permission('doctors.manage')
 def api_delete_doctor(did):
     doctor = db.get_or_404(Doctor, did)
     active_count = Appointment.query.filter(
@@ -642,16 +931,14 @@ def api_delete_doctor(did):
 # ─── API: Rooms ───────────────────────────────────────────────────────────────
 
 @app.route('/api/rooms', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('rooms.view')
 def api_rooms():
     rooms = Room.query.options(joinedload(Room.dept), joinedload(Room.beds)).all()
     return jsonify([r.to_dict() for r in rooms])
 
 
 @app.route('/api/rooms', methods=['POST'])
-@login_required
-@role_required(['admin'])
+@require_permission('rooms.manage')
 def api_add_room():
     data = request.get_json() or {}
     room_number = data.get('room_number')
@@ -679,8 +966,7 @@ def api_add_room():
 
 
 @app.route('/api/rooms/<int:rid>', methods=['PUT'])
-@login_required
-@role_required(['admin'])
+@require_permission('rooms.manage')
 def api_update_room(rid):
     room = db.get_or_404(Room, rid)
     data = request.get_json() or {}
@@ -707,8 +993,7 @@ def api_update_room(rid):
 
 
 @app.route('/api/rooms/<int:rid>', methods=['DELETE'])
-@login_required
-@role_required(['admin'])
+@require_permission('rooms.manage')
 def api_delete_room(rid):
     room = db.get_or_404(Room, rid)
     active_appts = Appointment.query.filter(
@@ -737,16 +1022,14 @@ def api_delete_room(rid):
 # ─── API: Departments ─────────────────────────────────────────────────────────
 
 @app.route('/api/departments', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('departments.view')
 def api_departments():
     depts = Department.query.all()
     return jsonify([d.to_dict() for d in depts])
 
 
 @app.route('/api/departments', methods=['POST'])
-@login_required
-@role_required(['admin'])
+@require_permission('departments.manage')
 def api_add_department():
     data = request.get_json() or {}
     name = data.get('name')
@@ -774,8 +1057,7 @@ def api_add_department():
 # ─── API: Inpatient Beds ──────────────────────────────────────────────────────
 
 @app.route('/api/beds', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('beds.view')
 def api_beds():
     beds = Bed.query.options(
         joinedload(Bed.room),
@@ -786,8 +1068,7 @@ def api_beds():
 
 
 @app.route('/api/beds', methods=['POST'])
-@login_required
-@role_required(['admin'])
+@require_permission('beds.manage')
 def api_add_bed():
     data = request.get_json() or {}
     bed_number = data.get('bed_number')
@@ -815,8 +1096,7 @@ def api_add_bed():
 
 
 @app.route('/api/beds/<int:bid>/status', methods=['PATCH'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('beds.manage')
 def api_update_bed_status(bid):
     bed = db.get_or_404(Bed, bid)
     data = request.get_json() or {}
@@ -834,8 +1114,7 @@ def api_update_bed_status(bid):
 
 
 @app.route('/api/beds/<int:bid>/admit', methods=['POST'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('beds.admit_discharge')
 def api_admit_patient_to_bed(bid):
     bed = db.get_or_404(Bed, bid)
     if bed.status == 'occupied':
@@ -871,8 +1150,7 @@ def api_admit_patient_to_bed(bid):
 
 
 @app.route('/api/beds/<int:bid>/discharge', methods=['POST'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('beds.admit_discharge')
 def api_discharge_patient_from_bed(bid):
     bed = db.get_or_404(Bed, bid)
     if bed.status != 'occupied' and not bed.patient_id:
@@ -889,16 +1167,14 @@ def api_discharge_patient_from_bed(bid):
 # ─── API: Medical Equipment ───────────────────────────────────────────────────
 
 @app.route('/api/equipment', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('equipment.view')
 def api_equipment():
     equip = Equipment.query.options(joinedload(Equipment.dept), joinedload(Equipment.room)).all()
     return jsonify([e.to_dict() for e in equip])
 
 
 @app.route('/api/equipment', methods=['POST'])
-@login_required
-@role_required(['admin'])
+@require_permission('equipment.manage')
 def api_add_equipment():
     data = request.get_json() or {}
     if not data.get('name'):
@@ -918,8 +1194,7 @@ def api_add_equipment():
 
 
 @app.route('/api/equipment/<int:eid>/status', methods=['PATCH'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('equipment.manage')
 def api_update_equipment_status(eid):
     eq = db.get_or_404(Equipment, eid)
     data = request.get_json() or {}
@@ -935,22 +1210,22 @@ def api_update_equipment_status(eid):
 # ─── API: Appointments ────────────────────────────────────────────────────────
 
 @app.route('/api/appointments', methods=['GET'])
-@login_required
-@role_required(['admin', 'manager', 'doctor', 'receptionist'])
+@require_permission('appointments.view')
 def api_appointments():
+    user = get_current_user()
     status = request.args.get('status', '')
     date_filter = request.args.get('date', '')
-    appts = Appointment.query.options(
+    query = scoped_query(Appointment, user).options(
         joinedload(Appointment.patient),
         joinedload(Appointment.doctor),
         joinedload(Appointment.room),
         joinedload(Appointment.equipment)
     )
     if status:
-        appts = appts.filter_by(status=status)
+        query = query.filter(Appointment.status == status)
     if date_filter:
-        appts = appts.filter_by(date=date_filter)
-    return jsonify([a.to_dict() for a in appts.order_by(Appointment.date, Appointment.start_time).all()])
+        query = query.filter(Appointment.date == date_filter)
+    return jsonify([a.to_dict(viewer=user) for a in query.order_by(Appointment.date, Appointment.start_time).all()])
 
 
 VALID_APPOINTMENT_TRANSITIONS = {
@@ -963,12 +1238,11 @@ VALID_APPOINTMENT_TRANSITIONS = {
 
 
 @app.route('/api/appointments/<int:aid>/status', methods=['PATCH'])
-@login_required
-@role_required(['admin', 'manager', 'doctor'])
+@require_permission('appointments.update_status')
 def api_update_appointment_status(aid):
     appt = db.get_or_404(Appointment, aid)
     current_user = get_current_user()
-    if session.get('role') == 'doctor':
+    if session.get('role') == 'doctor' or not user_has_permission(current_user, 'appointments.view_all'):
         if current_user and current_user.doctor_id and appt.doctor_id != current_user.doctor_id:
             return jsonify({'error': 'Doctors can only update their own appointments'}), 403
 
@@ -992,14 +1266,13 @@ def api_update_appointment_status(aid):
         appt.prescription = data['prescription']
     db.session.commit()
     log_audit('UPDATE', 'appointment', appt.id, f"Appointment #{appt.id} set to {new_status}")
-    return jsonify(appt.to_dict())
+    return jsonify(appt.to_dict(viewer=current_user))
 
 
 # ─── API: Emergency Code Red Walk-In ──────────────────────────────────────────
 
 @app.route('/api/emergency/walkin', methods=['POST'])
-@login_required
-@role_required(['admin', 'manager', 'receptionist'])
+@require_permission('emergency.trigger')
 def api_emergency_walkin():
     data = request.get_json() or {}
     name = data.get('name', 'Anonymous Emergency Walk-In')
@@ -1098,8 +1371,7 @@ def api_emergency_walkin():
 # ─── API: Optimization ────────────────────────────────────────────────────────
 
 @app.route('/api/optimize', methods=['POST'])
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('optimization.run')
 def api_optimize():
     data = request.get_json() or {}
     algorithm = data.get('algorithm', 'hybrid')
@@ -1136,8 +1408,11 @@ def api_optimize():
     ]
 
     if not patients_to_schedule:
-        # When no patients specifically requested target_date, use all remaining unscheduled patients
-        patients_to_schedule = unscheduled_patients
+        return jsonify({
+            'status': 'warning',
+            'message': f'No eligible unscheduled patients available for {target_date}.',
+            'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0}
+        })
 
     try:
         with db.session.begin_nested():
@@ -1208,8 +1483,9 @@ def api_optimize():
         for p in result['unassigned']
     ]
 
+    run_status = 'success' if result['metrics']['assigned'] > 0 else 'warning'
     return jsonify({
-        'status': 'success',
+        'status': run_status,
         'run_id': run.id,
         'algorithm': algorithm,
         'algorithm_used': run.algorithm_used,
@@ -1224,8 +1500,7 @@ def api_optimize():
 # ─── API: Crisis Scenario Simulation ("What-If" Analysis) ─────────────────────
 
 @app.route('/api/simulation/run', methods=['POST'])
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('simulation.run')
 def api_run_simulation():
     data = request.get_json() or {}
     target_date = data.get('date', date.today().isoformat())
@@ -1251,8 +1526,7 @@ def api_run_simulation():
 # ─── API: Analytics ───────────────────────────────────────────────────────────
 
 @app.route('/api/analytics/wait-time')
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('analytics.view')
 def api_analytics_wait_time():
     result = {}
     for priority in ['critical', 'urgent', 'normal', 'low']:
@@ -1266,8 +1540,7 @@ def api_analytics_wait_time():
 
 
 @app.route('/api/analytics/utilization')
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('analytics.view')
 def api_analytics_utilization():
     target_date = request.args.get('date', date.today().isoformat())
     doctors = Doctor.query.all()
@@ -1290,8 +1563,7 @@ def api_analytics_utilization():
 
 
 @app.route('/api/analytics/patients-status')
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('analytics.view')
 def api_analytics_patients_status():
     all_patients = Patient.query.all()
     assigned_ids = {a.patient_id for a in Appointment.query.filter_by(status='scheduled').all()}
@@ -1301,16 +1573,14 @@ def api_analytics_patients_status():
 
 
 @app.route('/api/optimization-runs')
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('optimization.history.view')
 def api_optimization_runs():
     runs = OptimizationRun.query.order_by(OptimizationRun.created_at.desc()).all()
     return jsonify([r.to_dict() for r in runs])
 
 
 @app.route('/api/audit-logs')
-@login_required
-@role_required(['admin'])
+@require_permission('audit.view')
 def api_audit_logs():
     logs = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(100).all()
     return jsonify([l.to_dict() for l in logs])
@@ -1328,8 +1598,7 @@ def sanitize_csv_cell(val):
 
 
 @app.route('/api/export/appointments/csv')
-@login_required
-@role_required(['admin', 'manager'])
+@require_permission('export.csv')
 def export_appointments_csv():
     target_date = request.args.get('date', date.today().isoformat())
     appts = Appointment.query.filter_by(date=target_date).order_by(Appointment.start_time).all()
@@ -1362,6 +1631,354 @@ def export_appointments_csv():
         mimetype='text/csv',
         headers={"Content-disposition": f"attachment; filename=appointments_{target_date}.csv"}
     )
+
+
+# ─── API: Roles & Permissions (Dynamic RBAC) ──────────────────────────────────
+
+@app.route('/api/roles', methods=['GET'])
+@require_permission('roles.view')
+def api_roles_list():
+    roles = Role.query.order_by(Role.is_system.desc(), Role.name.asc()).all()
+    perms = Permission.query.order_by(Permission.group, Permission.key).all()
+    return jsonify({
+        'roles': [r.to_dict(include_permissions=True) for r in roles],
+        'catalog': [p.to_dict() for p in perms],
+        'groups': PERMISSION_GROUPS
+    })
+
+
+@app.route('/api/roles', methods=['POST'])
+@require_permission('roles.manage')
+def api_create_role():
+    user = get_current_user()
+    ok, err_msg = verify_step_up_auth(user)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip().lower()
+    description = (data.get('description') or '').strip()
+    perm_keys = data.get('permissions') or []
+
+    if not name:
+        return jsonify({'error': 'Role name is required'}), 400
+    if len(name) < 2 or not name.isalnum():
+        return jsonify({'error': 'Role name must be alphanumeric and at least 2 characters'}), 400
+    if Role.query.filter_by(name=name).first():
+        return jsonify({'error': f"Role '{name}' already exists"}), 409
+
+    # Privilege escalation guard: non-admin cannot grant permissions they do not possess
+    user_perms = get_user_effective_permissions(user)
+    if user.get_role_name() != 'admin':
+        unauthorized_grants = [k for k in perm_keys if k not in user_perms]
+        if unauthorized_grants:
+            return jsonify({
+                'error': 'PrivilegeEscalationBlocked',
+                'message': f"Cannot grant permissions you do not possess: {', '.join(unauthorized_grants)}"
+            }), 403
+
+    perms_objs = Permission.query.filter(Permission.key.in_(perm_keys)).all()
+
+    new_role = Role(
+        name=name,
+        description=description,
+        is_system=False,
+        is_locked=False,
+        version=1
+    )
+    new_role.permissions = perms_objs
+    db.session.add(new_role)
+
+    log_audit('CREATE', 'role', None, f"Created custom role '{name}' with {len(perms_objs)} permissions")
+    db.session.commit()
+
+    return jsonify(new_role.to_dict(include_permissions=True)), 201
+
+
+@app.route('/api/roles/<int:rid>', methods=['GET'])
+@require_permission('roles.view')
+def api_get_role(rid):
+    role = db.get_or_404(Role, rid)
+    return jsonify(role.to_dict(include_permissions=True))
+
+
+@app.route('/api/roles/<int:rid>', methods=['PUT'])
+@require_permission('roles.manage')
+def api_update_role(rid):
+    user = get_current_user()
+    ok, err_msg = verify_step_up_auth(user)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    role = db.get_or_404(Role, rid)
+    if role.is_locked:
+        return jsonify({'error': 'RoleLocked', 'message': f"Role '{role.name}' is locked and its permissions cannot be modified."}), 403
+
+    data = request.get_json() or {}
+    description = data.get('description', role.description)
+    perm_keys = data.get('permissions')
+
+    if perm_keys is not None:
+        user_perms = get_user_effective_permissions(user)
+        if user.get_role_name() != 'admin':
+            unauthorized_grants = [k for k in perm_keys if k not in user_perms]
+            if unauthorized_grants:
+                return jsonify({
+                    'error': 'PrivilegeEscalationBlocked',
+                    'message': f"Cannot grant permissions you do not possess: {', '.join(unauthorized_grants)}"
+                }), 403
+
+        perms_objs = Permission.query.filter(Permission.key.in_(perm_keys)).all()
+        role.permissions = perms_objs
+
+    role.description = description
+    role.version += 1  # Invalidate cached permissions for users of this role
+
+    log_audit('UPDATE', 'role', role.id, f"Updated role '{role.name}' permissions (v{role.version})")
+    db.session.commit()
+
+    return jsonify(role.to_dict(include_permissions=True))
+
+
+@app.route('/api/roles/<int:rid>', methods=['DELETE'])
+@require_permission('roles.manage')
+def api_delete_role(rid):
+    user = get_current_user()
+    ok, err_msg = verify_step_up_auth(user)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    role = db.get_or_404(Role, rid)
+    if role.is_system:
+        return jsonify({'error': 'SystemRoleProtected', 'message': f"System role '{role.name}' cannot be deleted."}), 400
+
+    if role.users:
+        return jsonify({'error': 'RoleInUse', 'message': f"Cannot delete role '{role.name}': {len(role.users)} users are currently assigned to it."}), 400
+
+    role_name = role.name
+    db.session.delete(role)
+    log_audit('DELETE', 'role', rid, f"Deleted custom role '{role_name}'")
+    db.session.commit()
+
+    return jsonify({'message': f"Role '{role_name}' deleted successfully"})
+
+
+# ─── API: User Management & Overrides ──────────────────────────────────────────
+
+@app.route('/api/users', methods=['GET'])
+@require_permission('users.view')
+def api_users_list():
+    users = User.query.order_by(User.username.asc()).all()
+    roles = Role.query.order_by(Role.name.asc()).all()
+    doctors = Doctor.query.order_by(Doctor.name.asc()).all()
+    return jsonify({
+        'users': [u.to_dict(include_permissions=True) for u in users],
+        'roles': [{'id': r.id, 'name': r.name, 'is_locked': r.is_locked, 'description': r.description} for r in roles],
+        'doctors': [{'id': d.id, 'name': d.name, 'specialization': d.specialization} for d in doctors]
+    })
+
+
+@app.route('/api/users', methods=['POST'])
+@require_permission('users.manage')
+def api_create_user():
+    user = get_current_user()
+    ok, err_msg = verify_step_up_auth(user)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    data = request.get_json() or {}
+    username = (data.get('username') or '').strip().lower()
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password', '')
+    full_name = (data.get('full_name') or '').strip()
+    role_id = safe_int(data.get('role_id'))
+    doctor_id = safe_int(data.get('doctor_id')) or None
+
+    if not username or not email or not password:
+        return jsonify({'error': 'Username, email, and password are required'}), 400
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters long'}), 400
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': f"Username '{username}' is already taken"}), 409
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': f"Email '{email}' is already in use"}), 409
+
+    role = db.session.get(Role, role_id) if role_id else Role.query.filter_by(name='receptionist').first()
+    if not role:
+        return jsonify({'error': 'Selected role does not exist'}), 400
+
+    new_user = User(
+        username=username,
+        email=email,
+        role=role.name,
+        role_id=role.id,
+        full_name=full_name or username,
+        doctor_id=doctor_id,
+        is_active=True,
+        must_change_password=data.get('must_change_password', True)
+    )
+    new_user.set_password(password)
+    db.session.add(new_user)
+    db.session.flush()
+
+    log_audit('CREATE', 'user', new_user.id, f"Created user {username} with role {role.name}")
+    db.session.commit()
+
+    return jsonify(new_user.to_dict(include_permissions=True)), 201
+
+
+@app.route('/api/users/<int:uid>/role', methods=['PUT'])
+@require_permission('users.manage')
+def api_assign_user_role(uid):
+    current_admin = get_current_user()
+    ok, err_msg = verify_step_up_auth(current_admin)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    target_user = db.get_or_404(User, uid)
+    data = request.get_json() or {}
+    new_role_id = safe_int(data.get('role_id'))
+    new_role = db.session.get(Role, new_role_id)
+    if not new_role:
+        return jsonify({'error': 'Invalid role_id'}), 400
+
+    # Safeguard 1: Admin cannot demote themselves
+    if target_user.id == current_admin.id and target_user.get_role_name() == 'admin' and new_role.name != 'admin':
+        return jsonify({'error': 'SelfDemotionBlocked', 'message': 'You cannot remove your own administrator role.'}), 400
+
+    # Safeguard 2: Cannot demote the last active administrator
+    if target_user.get_role_name() == 'admin' and new_role.name != 'admin':
+        admin_role = Role.query.filter_by(name='admin').first()
+        active_admins = User.query.filter(User.role_id == admin_role.id, User.is_active == True).count() if admin_role else 0
+        if active_admins <= 1:
+            return jsonify({'error': 'LastAdminProtected', 'message': 'Cannot demote the last active administrator in the system.'}), 400
+
+    old_role_name = target_user.get_role_name()
+    target_user.role_id = new_role.id
+    target_user.role = new_role.name
+    target_user.permissions_version += 1  # Invalidate permission cache
+
+    log_audit('UPDATE_ROLE', 'user', target_user.id, f"Changed user {target_user.username} role from {old_role_name} to {new_role.name}")
+    db.session.commit()
+
+    return jsonify(target_user.to_dict(include_permissions=True))
+
+
+@app.route('/api/users/<int:uid>/status', methods=['PATCH'])
+@require_permission('users.manage')
+def api_toggle_user_status(uid):
+    current_admin = get_current_user()
+    ok, err_msg = verify_step_up_auth(current_admin)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    target_user = db.get_or_404(User, uid)
+    data = request.get_json() or {}
+    new_status = data.get('is_active')
+    if new_status is None:
+        new_status = not target_user.is_active
+
+    # Safeguard 1: Cannot disable own account
+    if target_user.id == current_admin.id and not new_status:
+        return jsonify({'error': 'SelfDisableBlocked', 'message': 'You cannot deactivate your own account.'}), 400
+
+    # Safeguard 2: Cannot deactivate the last active administrator
+    if target_user.get_role_name() == 'admin' and not new_status:
+        admin_role = Role.query.filter_by(name='admin').first()
+        active_admins = User.query.filter(User.role_id == admin_role.id, User.is_active == True).count() if admin_role else 0
+        if active_admins <= 1:
+            return jsonify({'error': 'LastAdminProtected', 'message': 'Cannot deactivate the last active administrator.'}), 400
+
+    target_user.is_active = bool(new_status)
+    target_user.permissions_version += 1
+
+    status_str = 'activated' if target_user.is_active else 'deactivated'
+    log_audit('UPDATE_STATUS', 'user', target_user.id, f"Account {target_user.username} {status_str}")
+    db.session.commit()
+
+    return jsonify(target_user.to_dict(include_permissions=True))
+
+
+@app.route('/api/users/<int:uid>/overrides', methods=['POST'])
+@require_permission('users.manage')
+def api_add_user_override(uid):
+    current_admin = get_current_user()
+    ok, err_msg = verify_step_up_auth(current_admin)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    target_user = db.get_or_404(User, uid)
+    data = request.get_json() or {}
+    perm_key = data.get('permission_key')
+    perm_id = safe_int(data.get('permission_id'))
+    effect = (data.get('effect') or '').strip().lower()
+    reason = (data.get('reason') or '').strip()
+
+    if effect not in ('grant', 'deny'):
+        return jsonify({'error': "Effect must be 'grant' or 'deny'"}), 400
+    if not reason:
+        return jsonify({'error': 'Reason is required for auditing security overrides'}), 400
+
+    perm = None
+    if perm_id:
+        perm = db.session.get(Permission, perm_id)
+    elif perm_key:
+        perm = Permission.query.filter_by(key=perm_key).first()
+
+    if not perm:
+        return jsonify({'error': 'Permission not found'}), 404
+
+    # Privilege escalation guard: non-admin cannot grant permissions they don't have
+    if effect == 'grant' and current_admin.get_role_name() != 'admin':
+        if not user_has_permission(current_admin, perm.key):
+            return jsonify({
+                'error': 'PrivilegeEscalationBlocked',
+                'message': f"Cannot grant permission '{perm.key}' that you do not hold."
+            }), 403
+
+    override = UserPermissionOverride.query.filter_by(user_id=target_user.id, permission_id=perm.id).first()
+    if not override:
+        override = UserPermissionOverride(
+            user_id=target_user.id,
+            permission_id=perm.id,
+            effect=effect,
+            reason=reason,
+            created_by=current_admin.username
+        )
+        db.session.add(override)
+    else:
+        override.effect = effect
+        override.reason = reason
+        override.created_by = current_admin.username
+
+    target_user.permissions_version += 1  # Invalidate permission cache
+    log_audit('OVERRIDE', 'user', target_user.id, f"Set {effect.upper()} override for {perm.key} on {target_user.username}: {reason}")
+    db.session.commit()
+
+    return jsonify(target_user.to_dict(include_permissions=True)), 201
+
+
+@app.route('/api/users/<int:uid>/overrides/<int:perm_id>', methods=['DELETE'])
+@require_permission('users.manage')
+def api_delete_user_override(uid, perm_id):
+    current_admin = get_current_user()
+    ok, err_msg = verify_step_up_auth(current_admin)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    target_user = db.get_or_404(User, uid)
+    override = UserPermissionOverride.query.filter_by(user_id=target_user.id, permission_id=perm_id).first()
+    if not override:
+        return jsonify({'error': 'Override not found'}), 404
+
+    perm_key = override.permission.key if override.permission else str(perm_id)
+    db.session.delete(override)
+    target_user.permissions_version += 1
+    log_audit('DELETE_OVERRIDE', 'user', target_user.id, f"Removed override for {perm_key} on {target_user.username}")
+    db.session.commit()
+
+    return jsonify(target_user.to_dict(include_permissions=True))
 
 
 # ─── Main Execution ───────────────────────────────────────────────────────────

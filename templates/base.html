@@ -27,25 +27,61 @@
 
   <div class="sidebar-nav">
     <div class="nav-section-title" data-i18n="nav_overview">Overview</div>
+    {% if can('dashboard.view') %}
     <a class="nav-item" href="/"><span class="nav-icon">📊</span> <span data-i18n="nav_dashboard">Dashboard</span></a>
+    {% endif %}
+    {% if can('analytics.view') %}
     <a class="nav-item" href="/analytics"><span class="nav-icon">📈</span> <span data-i18n="nav_analytics">Analytics</span></a>
+    {% endif %}
 
     <div class="nav-section-title" data-i18n="nav_resources">Resources</div>
+    {% if can('patients.view') %}
     <a class="nav-item" href="/patients"><span class="nav-icon">🧑‍⚕️</span> <span data-i18n="nav_patients">Patients</span></a>
+    {% endif %}
+    {% if can('doctors.view') %}
     <a class="nav-item" href="/doctors"><span class="nav-icon">👨‍⚕️</span> <span data-i18n="nav_doctors">Doctors</span></a>
+    {% endif %}
+    {% if can('rooms.view') %}
     <a class="nav-item" href="/rooms"><span class="nav-icon">🚪</span> <span data-i18n="nav_rooms">Rooms</span></a>
+    {% endif %}
+    {% if can('beds.view') %}
     <a class="nav-item" href="/beds"><span class="nav-icon">🛏️</span> <span data-i18n="nav_beds">Inpatient Beds</span></a>
+    {% endif %}
+    {% if can('equipment.view') %}
     <a class="nav-item" href="/equipment"><span class="nav-icon">🩺</span> <span data-i18n="nav_equipment">Equipment</span></a>
+    {% endif %}
+    {% if can('departments.view') %}
     <a class="nav-item" href="/departments"><span class="nav-icon">🏢</span> <span data-i18n="nav_departments">Departments</span></a>
+    {% endif %}
 
     <div class="nav-section-title" data-i18n="nav_scheduling">Scheduling & AI</div>
+    {% if can('appointments.view') %}
     <a class="nav-item" href="/appointments"><span class="nav-icon">📅</span> <span data-i18n="nav_appointments">Appointments & Timeline</span></a>
+    {% endif %}
+    {% if can('optimization.run') or can('optimization.history.view') %}
     <a class="nav-item" href="/optimize"><span class="nav-icon">⚡</span> <span data-i18n="nav_optimize">AI Optimization</span></a>
+    {% endif %}
+    {% if can('simulation.run') %}
     <a class="nav-item" href="/simulator"><span class="nav-icon">🧪</span> <span data-i18n="nav_simulator">Crisis Simulator</span></a>
+    {% endif %}
+    {% if can('optimization.history.view') %}
     <a class="nav-item" href="/history"><span class="nav-icon">🕓</span> <span data-i18n="nav_history">Run History</span></a>
+    {% endif %}
 
+    {% if can('roles.view') or can('users.view') %}
+    <div class="nav-section-title" data-i18n="nav_access_control">Access Control</div>
+    {% if can('roles.view') %}
+    <a class="nav-item" href="/roles"><span class="nav-icon">🛡️</span> <span data-i18n="nav_roles">Roles & Permissions</span></a>
+    {% endif %}
+    {% if can('users.view') %}
+    <a class="nav-item" href="/users"><span class="nav-icon">👥</span> <span data-i18n="nav_users">Staff & Users</span></a>
+    {% endif %}
+    {% endif %}
+
+    {% if can('queue_display.view') %}
     <div class="nav-section-title" data-i18n="nav_public">Public Displays</div>
     <a class="nav-item" href="/queue-display" target="_blank"><span class="nav-icon">📺</span> <span data-i18n="nav_display">Waiting Hall Monitor</span></a>
+    {% endif %}
   </div>
 
   <div class="sidebar-footer">
@@ -72,9 +108,11 @@
 
     <div class="header-actions">
       <!-- Emergency Code Red Fast Trigger -->
+      {% if can('emergency.trigger') %}
       <button class="btn btn-emergency" onclick="openEmergencyModal()">
         🚨 <span class="hide-mobile-text" data-i18n="btn_emergency">Code Red Walk-In</span>
       </button>
+      {% endif %}
 
       <!-- Language Toggle -->
       <button class="btn btn-outline btn-sm" id="lang-toggle-btn" onclick="toggleLanguage()">
