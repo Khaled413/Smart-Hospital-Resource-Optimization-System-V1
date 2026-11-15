@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Smart Hospital Optimizer — MediOptim Pro{% endblock %}</title>
   <meta name="description" content="Smart Hospital Resource Optimization System - AI-powered scheduling, beds, equipment & emergency preemption">
-  <link rel="stylesheet" href="/static/css/style.css">
-  <link rel="icon" type="image/png" href="/static/img/logo.png">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   {% block extra_head %}{% endblock %}
 </head>
@@ -16,7 +17,7 @@
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <div class="logo-icon">
-      <img src="/static/img/logo.png" alt="MediOptim Pro Logo" class="logo-img">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="MediOptim Pro Logo" class="logo-img">
     </div>
     <div class="logo-text">
       <span class="app-name">MediOptim Pro</span>
@@ -169,7 +170,7 @@
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="/static/js/app.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>

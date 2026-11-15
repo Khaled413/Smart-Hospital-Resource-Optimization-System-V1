@@ -4,8 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Login — MediOptim Pro Hospital Management</title>
-  <link rel="icon" type="image/png" href="/static/img/logo.png">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>
     body {
       display: flex;
@@ -67,20 +68,21 @@
 <div class="login-container">
   <div class="login-box">
     <div style="text-align:center;margin-bottom:24px">
-      <img src="/static/img/logo.png" alt="MediOptim Pro Logo" style="width:80px;height:80px;object-fit:contain;margin-bottom:12px;filter:drop-shadow(0 4px 8px rgba(2,132,199,0.15));">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="MediOptim Pro Logo" style="width:80px;height:80px;object-fit:contain;margin-bottom:12px;filter:drop-shadow(0 4px 8px rgba(2,132,199,0.15));">
       <h2 style="margin:0;font-size:24px;font-weight:800;color:#0f172a;letter-spacing:-0.5px">MediOptim Pro</h2>
       <div style="font-size:13px;color:#64748b;margin-top:4px;font-weight:500">Smart Hospital Resource Optimization System</div>
     </div>
 
     <!-- Quick Demo Logins -->
     <div style="margin-bottom:24px;background:#f8fafc;padding:14px;border-radius:12px;border:1px dashed #cbd5e1">
-      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:10px;text-align:center;text-transform:uppercase;letter-spacing:0.5px">⚡ Quick Auto-Fill Demo Accounts:</div>
+      <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:10px;text-align:center;text-transform:uppercase;letter-spacing:0.5px">⚡ Quick Select Role:</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <button type="button" class="demo-role-btn" onclick="fillCreds('admin', 'admin123')">👑 Admin</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('dr_sarah', 'doctor123')">👨‍⚕️ Dr. Sarah</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('manager', 'manager123')">🏢 Operations</button>
-        <button type="button" class="demo-role-btn" onclick="fillCreds('receptionist', 'reception123')">📋 Reception</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('admin', 'Admin#2025!')">👑 Admin</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('dr_sarah', 'Doctor#2025!')">👨‍⚕️ Dr. Sarah</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('manager', 'Manager#2025!')">🏢 Operations</button>
+        <button type="button" class="demo-role-btn" onclick="fillCreds('receptionist', 'Reception#2025!')">📋 Reception</button>
       </div>
+      <div style="font-size:10.5px;color:#64748b;margin-top:8px;text-align:center">Click any role to autofill login credentials instantly.</div>
     </div>
 
     <form id="login-form" onsubmit="handleLogin(event)">
@@ -96,17 +98,17 @@
       <button type="submit" class="btn btn-primary btn-lg w-full" style="justify-content:center;margin-top:20px" id="login-btn">
         Sign In
       </button>
-
-      <div style="text-align:center;margin-top:16px">
-        <a href="/" style="font-size:12px;color:#64748b;text-decoration:none">← Return to Dashboard as Guest</a>
-      </div>
     </form>
   </div>
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<script src="/static/js/app.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
+function fillUser(u) {
+  document.getElementById('login-username').value = u;
+  document.getElementById('login-password').focus();
+}
 function fillCreds(u, p) {
   document.getElementById('login-username').value = u;
   document.getElementById('login-password').value = p;
@@ -122,9 +124,15 @@ async function handleLogin(e) {
 
   try {
     const res = await API.post('/api/auth/login', { username: u, password: p });
-    ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
+    if (res.user && res.user.must_change_password) {
+      ToastManager.show(`Welcome! Please update your default password.`, 'warning');
+    } else {
+      ToastManager.show(`Welcome back, ${res.user.full_name}!`, 'success');
+    }
     setTimeout(() => {
-      window.location.href = '/';
+      const params = new URLSearchParams(window.location.search);
+      const nextUrl = params.get('next') || '/';
+      window.location.href = nextUrl;
     }, 600);
   } catch(err) {
     ToastManager.show(err.message, 'error');

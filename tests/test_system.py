@@ -10,24 +10,32 @@ import sys
 # Add root directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app import app
+from app import app, limiter
 from models import db, Department, Doctor, Patient, Room, Bed, Equipment, Appointment, User
 from optimizer import (
     run_greedy, run_lp, run_hybrid, handle_emergency_preemption,
-    predict_no_show_risk, run_scenario_simulation
+    predict_no_show_risk, run_scenario_simulation, run_optimization,
+    ScheduleState, sync_triage_and_priority, times_overlap, time_to_minutes
 )
 
 
 @pytest.fixture
 def client():
     app.config['TESTING'] = True
+    app.config['RATELIMIT_ENABLED'] = False
+    limiter.enabled = False
+    os.environ['ADMIN_INITIAL_PASSWORD'] = 'Admin#2025!'
     with app.test_client() as test_client:
         yield test_client
 
 
+def login_as(client, username='admin', password='Admin#2025!'):
+    return client.post('/api/auth/login', json={'username': username, 'password': password})
+
+
 def test_user_authentication(client):
     """Test user password hashing and login API."""
-    res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
+    res = client.post('/api/auth/login', json={'username': 'admin', 'password': 'Admin#2025!'})
     assert res.status_code == 200
     data = res.get_json()
     assert data['user']['username'] == 'admin'
@@ -36,6 +44,53 @@ def test_user_authentication(client):
     # Failed login
     res_fail = client.post('/api/auth/login', json={'username': 'admin', 'password': 'wrongpassword'})
     assert res_fail.status_code == 401
+
+
+def test_rbac_and_protected_routes(client):
+    """Test that unauthorized access is blocked and roles are strictly enforced."""
+    # 1. Unauthenticated page redirect
+    res_page = client.get('/')
+    assert res_page.status_code == 302
+    assert '/login' in res_page.headers['Location']
+
+    # 2. Unauthenticated API returns 401
+    res_api = client.get('/api/dashboard')
+    assert res_api.status_code == 401
+
+    # 3. Login as receptionist
+    login_as(client, 'receptionist', 'Reception#2025!')
+
+    # Receptionist can view beds
+    res_beds = client.get('/api/beds')
+    assert res_beds.status_code == 200
+
+    # Receptionist cannot access audit logs (Admin only)
+    res_audit = client.get('/api/audit-logs')
+    assert res_audit.status_code == 403
+
+    # Receptionist cannot trigger AI optimization (Admin & Manager only)
+    res_opt = client.post('/api/optimize', json={})
+    assert res_opt.status_code == 403
+
+    # 4. Login as admin
+    login_as(client, 'admin', 'Admin#2025!')
+    res_audit_admin = client.get('/api/audit-logs')
+    assert res_audit_admin.status_code == 200
+
+
+def test_security_headers_and_csv_sanitization(client):
+    """Test security headers and CSV export sanitization."""
+    res = client.get('/login')
+    assert res.headers.get('X-Content-Type-Options') == 'nosniff'
+    assert res.headers.get('X-Frame-Options') == 'SAMEORIGIN'
+    assert 'Content-Security-Policy' in res.headers
+
+    from app import sanitize_csv_cell
+    assert sanitize_csv_cell("=1+1") == "'=1+1"
+    assert sanitize_csv_cell("+cmd") == "'+cmd"
+    assert sanitize_csv_cell("-123") == "'-123"
+    assert sanitize_csv_cell("@calc") == "'@calc"
+    assert sanitize_csv_cell("Normal text") == "Normal text"
 
 
 def test_no_show_prediction():
@@ -100,6 +155,13 @@ def test_emergency_code_red_preemption(client):
 
 def test_bed_management_api(client):
     """Test bed admission and discharge flow."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        for b in Bed.query.all():
+            b.patient_id = None
+            b.status = 'vacant'
+        db.session.commit()
+
     # List beds
     res = client.get('/api/beds')
     assert res.status_code == 200
@@ -135,3 +197,265 @@ def test_scenario_simulation():
         assert 'crisis' in sim
         assert 'impact' in sim
         assert sim['crisis']['total_patients'] >= sim['baseline']['total_patients']
+
+
+def test_schedule_state_and_hybrid_conflict_free():
+    """Verify ScheduleState tracks busy intervals and Hybrid never double-books doctors or rooms."""
+    with app.app_context():
+        patients = Patient.query.limit(12).all()
+        doctors = Doctor.query.all()
+        rooms = Room.query.all()
+
+        # Run hybrid optimization
+        assignments, unassigned, log = run_hybrid(patients, doctors, rooms, "2025-01-01")
+
+        # 1. Verify no doctor is double-booked
+        doc_times = {}
+        for a in assignments:
+            d_id = a['doctor'].id
+            s = time_to_minutes(a['start_time'])
+            e = time_to_minutes(a['end_time'])
+            if d_id not in doc_times:
+                doc_times[d_id] = []
+            for prev_s, prev_e in doc_times[d_id]:
+                assert not times_overlap(s, e, prev_s, prev_e), f"Doctor {d_id} double booked: {s}-{e} vs {prev_s}-{prev_e}"
+            doc_times[d_id].append((s, e))
+
+        # 2. Verify no room is double-booked (including cleaning buffer)
+        room_times = {}
+        for a in assignments:
+            r_id = a['room'].id
+            s = time_to_minutes(a['start_time'])
+            e = time_to_minutes(a['end_time']) + a.get('buffer_minutes', 10)
+            if r_id not in room_times:
+                room_times[r_id] = []
+            for prev_s, prev_e in room_times[r_id]:
+                assert not times_overlap(s, e, prev_s, prev_e), f"Room {r_id} double booked with buffer: {s}-{e} vs {prev_s}-{prev_e}"
+            room_times[r_id].append((s, e))
+
+
+def test_priority_triage_synchronization():
+    """Verify ESI levels and priorities are synchronized and consistent."""
+    assert sync_triage_and_priority(priority=None, triage_level=1) == ('critical', 1)
+    assert sync_triage_and_priority(priority=None, triage_level=2) == ('critical', 2)
+    assert sync_triage_and_priority(priority=None, triage_level=3) == ('urgent', 3)
+    assert sync_triage_and_priority(priority=None, triage_level=4) == ('normal', 4)
+    assert sync_triage_and_priority(priority=None, triage_level=5) == ('low', 5)
+
+    # Contradicting inputs prioritize valid triage level
+    assert sync_triage_and_priority(priority='low', triage_level=1) == ('critical', 1)
+
+
+def test_api_optimize_atomic_and_excludes_scheduled(client):
+    """Verify /api/optimize endpoint excludes already-scheduled patients and operates atomically."""
+    login_as(client, 'admin', 'Admin#2025!')
+    target_date = "2025-10-10"
+
+    # First run: schedules patients
+    res1 = client.post('/api/optimize', json={'algorithm': 'hybrid', 'date': target_date, 'clear_existing': True})
+    assert res1.status_code == 200
+    data1 = res1.get_json()
+    assert data1['status'] == 'success'
+    assert 'algorithm_used' in data1
+    first_assigned = len(data1['assignments'])
+    assert first_assigned > 0
+
+    # Second run without clear_existing: already scheduled patients must be excluded
+    res2 = client.post('/api/optimize', json={'algorithm': 'hybrid', 'date': target_date, 'clear_existing': False})
+    assert res2.status_code == 200
+    data2 = res2.get_json()
+    # Should warn that no eligible unscheduled patients are left
+    assert data2['status'] == 'warning'
+    assert data2['metrics']['assigned'] == 0
+
+
+def test_analytics_utilization_date_filtered(client):
+    """Verify /api/analytics/utilization returns date-filtered utilization metrics."""
+    login_as(client, 'admin', 'Admin#2025!')
+    res = client.get('/api/analytics/utilization?date=2025-10-10')
+    assert res.status_code == 200
+    util_list = res.get_json()
+    assert isinstance(util_list, list)
+    for u in util_list:
+        assert 'doctor' in u
+        assert 'utilization' in u
+        assert 'booked_minutes' in u
+        assert u['utilization'] >= 0
+
+
+def test_lp_infeasible_status_and_solver_fallback():
+    """Verify LP solver falls back gracefully to Greedy when candidate variables or problem is infeasible."""
+    with app.app_context():
+        # Large dataset or dummy patients
+        doctors = Doctor.query.all()
+        rooms = Room.query.all()
+        # Create an artificial ScheduleState where all doctors and rooms are completely full
+        state = ScheduleState(doctors, rooms)
+        for d in doctors:
+            state.doctor_patient_count[d.id] = d.max_patients_per_day
+
+        patients = Patient.query.limit(5).all()
+        # With zero quota left for any doctor, run_lp should fall back cleanly
+        res = run_lp(patients, doctors, rooms, "2025-01-01", schedule_state=state)
+        # Should return OptimizerResult with algorithm_used recorded
+        assert isinstance(res, tuple)
+        assignments, unassigned, log = res[0], res[1], res[2]
+        assert len(assignments) == 0
+        assert len(unassigned) == len(patients)
+        assert res.algorithm_used == 'greedy'
+        assert res.fallback_reason is not None
+
+
+def test_emergency_preemption_respects_doctor_shift():
+    """Verify emergency preemption checks doctor's actual shift and does not bump beyond shift boundaries."""
+    with app.app_context():
+        doctors = Doctor.query.all()
+        rooms = Room.query.all()
+
+        # Doctor with early shift end
+        doc = doctors[0]
+        appt = Appointment(
+            patient_id=1,
+            doctor_id=doc.id,
+            room_id=rooms[0].id,
+            date="2025-01-01",
+            start_time="15:30",
+            end_time="16:00",
+            duration_minutes=30,
+            status="scheduled",
+            is_emergency=False
+        )
+
+        em_patient = Patient(
+            name="Late Emergency Patient",
+            age=55,
+            gender="Female",
+            priority="critical",
+            required_specialization=doc.specialization,
+            triage_level=1
+        )
+
+        # Call emergency preemption
+        res = handle_emergency_preemption(em_patient, [appt], [doc], rooms, "2025-01-01")
+        assert res['action'] in ('immediate_slot', 'preempted')
+        if res['action'] == 'preempted':
+            plan = res.get('bumped_plan')
+            assert plan is not None
+            # Either conflict-free relocated before doc.available_until, or flagged needs_reschedule
+            if plan.get('rescheduled_slot'):
+                assert time_to_minutes(plan['rescheduled_slot']['end_time']) <= time_to_minutes(doc.available_until)
+            else:
+                assert plan.get('needs_reschedule') is True
+
+
+def test_specialization_flexible_compatibility():
+    """Verify alias mapping and flexible specialization matching."""
+    from optimizer import are_specializations_compatible, normalize_specialization
+    assert normalize_specialization('Cardio') == 'cardiology'
+    assert normalize_specialization('cardiologist') == 'cardiology'
+    assert normalize_specialization('ortho') == 'orthopedics'
+    assert are_specializations_compatible('Cardiology', 'cardiologist') is True
+    assert are_specializations_compatible('General Surgery', 'surgery') is True
+    assert are_specializations_compatible('Pediatrics', 'pediatrician') is True
+    assert are_specializations_compatible('Neurology', 'Cardiology') is False
+
+
+def test_appointment_status_state_machine(client):
+    """Verify appointment status transition validation."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        appt = Appointment.query.filter_by(status='scheduled').first()
+        if not appt:
+            appt = Appointment(patient_id=1, doctor_id=1, room_id=1, date="2025-01-01",
+                               start_time="09:00", end_time="09:30", duration_minutes=30, status="scheduled")
+            db.session.add(appt)
+            db.session.commit()
+        appt_id = appt.id
+
+    # scheduled -> in_progress (valid)
+    res = client.patch(f'/api/appointments/{appt_id}/status', json={'status': 'in_progress'})
+    assert res.status_code == 200
+    assert res.get_json()['status'] == 'in_progress'
+
+    # in_progress -> completed (valid)
+    res = client.patch(f'/api/appointments/{appt_id}/status', json={'status': 'completed'})
+    assert res.status_code == 200
+    assert res.get_json()['status'] == 'completed'
+
+    # completed -> scheduled (invalid transition: terminal state)
+    res = client.patch(f'/api/appointments/{appt_id}/status', json={'status': 'scheduled'})
+    assert res.status_code == 400
+    assert 'Invalid status transition' in res.get_json()['error']
+
+
+def test_bed_admission_guards(client):
+    """Verify validation when admitting patients to beds."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        for b in Bed.query.all():
+            b.patient_id = None
+            b.status = 'vacant'
+        db.session.commit()
+
+    # Fetch beds
+    beds = client.get('/api/beds').get_json()
+    vacant = [b for b in beds if b['status'] == 'vacant']
+    assert len(vacant) >= 2, "Need at least 2 vacant beds to test admission guards"
+    b1 = vacant[0]['id']
+    b2 = vacant[1]['id']
+
+    # Missing patient_id
+    res = client.post(f'/api/beds/{b1}/admit', json={})
+    assert res.status_code == 400
+
+    # Admit patient 1 to bed 1
+    res_admit = client.post(f'/api/beds/{b1}/admit', json={'patient_id': 1})
+    assert res_admit.status_code == 200
+
+    # Cannot admit another patient to already occupied bed 1
+    res = client.post(f'/api/beds/{b1}/admit', json={'patient_id': 2})
+    assert res.status_code == 400
+    assert 'already occupied' in res.get_json()['error']
+
+    # Cannot admit patient 1 into bed 2 when already in bed 1
+    res = client.post(f'/api/beds/{b2}/admit', json={'patient_id': 1})
+    assert res.status_code == 400
+    assert 'already admitted' in res.get_json()['error']
+
+
+def test_deletion_safeguards_active_appointments(client):
+    """Verify deletion of doctor or patient is rejected if active appointments exist."""
+    login_as(client, 'admin', 'Admin#2025!')
+    with app.app_context():
+        # Ensure active appointment exists
+        appt = Appointment.query.filter_by(status='scheduled').first()
+        if not appt:
+            appt = Appointment(patient_id=1, doctor_id=1, room_id=1, date="2025-01-01",
+                               start_time="09:00", end_time="09:30", duration_minutes=30, status="scheduled")
+            db.session.add(appt)
+            db.session.commit()
+        doc_id = appt.doctor_id
+        pat_id = appt.patient_id
+
+    # Attempt delete doctor with active appt
+    res = client.delete(f'/api/doctors/{doc_id}')
+    assert res.status_code == 400
+    assert 'active appointment' in res.get_json()['error']
+
+    # Attempt delete patient with active appt
+    res = client.delete(f'/api/patients/{pat_id}')
+    assert res.status_code == 400
+    assert 'active appointment' in res.get_json()['error']
+
+
+def test_unique_constraint_conflicts(client):
+    """Verify unique constraint collisions return HTTP 409 Conflict."""
+    login_as(client, 'admin', 'Admin#2025!')
+    # Add room
+    res1 = client.post('/api/rooms', json={'room_number': 'UNIQUE-TEST-101', 'department_id': 1})
+    assert res1.status_code in (201, 409)
+
+    # Add duplicate room
+    res2 = client.post('/api/rooms', json={'room_number': 'UNIQUE-TEST-101', 'department_id': 1})
+    assert res2.status_code == 409
+    assert 'already exists' in res2.get_json()['error']
