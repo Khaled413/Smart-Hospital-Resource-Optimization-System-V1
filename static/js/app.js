@@ -338,14 +338,18 @@ async function checkAuthStatus() {
 
       if (container) {
         container.innerHTML = `
-          <div style="display:flex;align-items:center;gap:6px;background:#f1f5f9;border:1px solid #e2e8f0;padding:3px 8px 3px 12px;border-radius:20px;font-size:12px">
+          <div style="display:flex;align-items:center;gap:8px;background:#f8fafc;border:1px solid #cbd5e1;padding:4px 10px 4px 12px;border-radius:20px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,0.03)">
             <a href="/profile" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;" title="Profile Settings & Account">
               <span>👤</span>
               <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
               <span class="badge" style="background:#0284c7;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
             </a>
-            <a href="/profile" style="color:#64748b;text-decoration:none;font-size:13px;padding:2px 4px" title="Profile Settings">⚙️</a>
-            <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:2px 4px;line-height:1;" title="Sign Out">✕</button>
+            <a href="/profile" class="btn btn-outline btn-sm" style="padding:2px 6px;font-size:11px;color:var(--text-secondary);text-decoration:none;border-radius:6px;display:flex;align-items:center;gap:3px" title="User Profile & Security Settings">
+              ⚙️ <span class="hide-mobile-text">Settings</span>
+            </a>
+            <button onclick="confirmLogout()" class="btn btn-outline btn-sm" style="background:#fef2f2;border-color:#fecaca;color:#dc2626;cursor:pointer;font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;display:flex;align-items:center;gap:4px" title="Sign Out of MediOptim Pro">
+              🚪 <span>Sign Out</span>
+            </button>
           </div>
         `;
       }
@@ -363,6 +367,12 @@ async function checkAuthStatus() {
     }
   } catch(e) {
     console.error('Auth check error', e);
+  }
+}
+
+async function confirmLogout() {
+  if (confirm('Are you sure you want to sign out of MediOptim Pro?')) {
+    await logoutUser();
   }
 }
 

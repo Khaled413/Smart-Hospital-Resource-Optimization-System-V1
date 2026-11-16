@@ -180,11 +180,12 @@ body {
 
 /* ── Top Header ── */
 .top-header {
-  height: var(--header-height);
+  min-height: var(--header-height);
+  height: auto;
   background: #ffffff;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 32px;
+  padding: 10px 32px;
   position: sticky; top: 0; z-index: 50;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
   gap: 16px;

@@ -3,84 +3,229 @@
 {% block page_title %}Clinical Departments{% endblock %}
 {% block page_subtitle %}Specialized hospital wings, medical staffing, beds allocation, and equipment assets{% endblock %}
 
+{% block header_actions %}
+<button class="btn btn-primary" onclick="openAddDeptModal()" id="btn-add-dept" data-permission="departments.manage">
+  ➕ <span data-i18n="add_department">Add Department</span>
+</button>
+{% endblock %}
+
 {% block content %}
 <div id="dept-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:20px"></div>
+
+<!-- Add / Edit Department Modal -->
+<div class="modal-overlay" id="dept-modal">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-header">
+      <div class="modal-title" id="dept-modal-title">➕ Add Department</div>
+      <button class="modal-close" onclick="Modal.close('dept-modal')">✕</button>
+    </div>
+    <form id="dept-form" onsubmit="saveDepartment(event)">
+      <input type="hidden" id="dept-id">
+      <div class="form-group">
+        <label class="form-label">Department Name *</label>
+        <input class="form-control" id="dept-name" placeholder="e.g. Cardiology" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Patient Capacity</label>
+        <input class="form-control" id="dept-capacity" type="number" min="1" max="500" value="50" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description / Scope of Practice</label>
+        <textarea class="form-control" id="dept-desc" rows="3" placeholder="Clinical specialties, inpatient services, diagnostic units..."></textarea>
+      </div>
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="Modal.close('dept-modal')">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="btn-save-dept">Save Department</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal-overlay" id="delete-dept-modal">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <div class="modal-title" style="color:#ef4444">⚠️ Delete Department</div>
+      <button class="modal-close" onclick="Modal.close('delete-dept-modal')">✕</button>
+    </div>
+    <div style="padding:16px 0">
+      <p style="font-size:14px;color:var(--text-secondary);margin:0 0 10px">
+        Are you sure you want to delete department <strong id="delete-dept-name" style="color:var(--text-primary)"></strong>?
+      </p>
+      <div style="font-size:12px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:10px 12px;border-radius:8px">
+        🛡️ Safeguard: Departments with assigned physicians, beds, or rooms cannot be deleted until reassigned.
+      </div>
+    </div>
+    <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:10px">
+      <button type="button" class="btn btn-outline" onclick="Modal.close('delete-dept-modal')">Cancel</button>
+      <button type="button" class="btn btn-danger" id="btn-confirm-delete-dept" onclick="executeDeleteDepartment()">Delete</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
 const deptColors = ['#1a56db','#ef4444','#10b981','#8b5cf6','#06b6d4'];
 const deptEmojis = ['❤️','🧠','🦴','👶','⚕️'];
+let deletingDeptId = null;
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
 
 async function loadDepts() {
-  const [depts, doctors, rooms, equipment, beds] = await Promise.all([
-    API.get('/api/departments'),
-    API.get('/api/doctors'),
-    API.get('/api/rooms'),
-    API.get('/api/equipment'),
-    API.get('/api/beds')
-  ]);
-  const grid = document.getElementById('dept-grid');
-  grid.innerHTML = depts.map((d, i) => {
-    const color = deptColors[i % deptColors.length];
-    const emoji = deptEmojis[i % deptEmojis.length];
-    const deptDocs = doctors.filter(doc => doc.department_id === d.id);
-    const deptEquip = equipment.filter(e => e.department_id === d.id);
-    const deptBeds = beds.filter(b => b.department_id === d.id);
-    const occupiedBeds = deptBeds.filter(b => b.status === 'occupied').length;
+  try {
+    const [depts, doctors, rooms, equipment, beds] = await Promise.all([
+      API.get('/api/departments'),
+      API.get('/api/doctors'),
+      API.get('/api/rooms'),
+      API.get('/api/equipment'),
+      API.get('/api/beds')
+    ]);
+    const grid = document.getElementById('dept-grid');
+    grid.innerHTML = depts.map((d, i) => {
+      const color = deptColors[i % deptColors.length];
+      const emoji = deptEmojis[i % deptEmojis.length];
+      const deptDocs = doctors.filter(doc => doc.department_id === d.id);
+      const deptEquip = equipment.filter(e => e.department_id === d.id);
+      const deptBeds = beds.filter(b => b.department_id === d.id);
+      const occupiedBeds = deptBeds.filter(b => b.status === 'occupied').length;
 
-    return `
-    <div class="card" style="border-left:4px solid ${color};display:flex;flex-direction:column;justify-content:space-between">
-      <div>
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
-          <div style="width:54px;height:54px;background:${color}20;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0">${emoji}</div>
-          <div>
-            <div style="font-size:18px;font-weight:700">${d.name}</div>
-            <div style="font-size:12px;color:var(--text-muted)">${d.description || 'Specialized Department'}</div>
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
-          <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
-            <div style="font-size:18px;font-weight:800;color:${color}">${d.capacity}</div>
-            <div style="font-size:9px;color:var(--text-muted);margin-top:2px">CAPACITY</div>
-          </div>
-          <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
-            <div style="font-size:18px;font-weight:800;color:var(--text-primary)">${deptDocs.length}</div>
-            <div style="font-size:9px;color:var(--text-muted);margin-top:2px">DOCTORS</div>
-          </div>
-          <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
-            <div style="font-size:18px;font-weight:800;color:var(--text-primary)">${deptBeds.length}</div>
-            <div style="font-size:9px;color:var(--text-muted);margin-top:2px">BEDS (${occupiedBeds} occ)</div>
-          </div>
-          <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
-            <div style="font-size:18px;font-weight:800;color:var(--accent)">${deptEquip.length}</div>
-            <div style="font-size:9px;color:var(--text-muted);margin-top:2px">DEVICES</div>
-          </div>
-        </div>
-
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
-          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Physicians on duty:</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px">
-            ${deptDocs.map(doc =>
-              `<span style="background:${color}15;color:${color};border:1px solid ${color}30;padding:2px 8px;border-radius:20px;font-size:11px">${formatDoctorName(doc.name, true)}</span>`
-            ).join('') || '<span style="color:var(--text-muted);font-size:11px">None</span>'}
-          </div>
-        </div>
-
-        ${deptEquip.length ? `
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Assigned Devices:</div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px">
-              ${deptEquip.map(eq =>
-                `<span style="background:#f1f5f9;border:1px solid #e2e8f0;color:var(--text-secondary);padding:3px 8px;border-radius:6px;font-size:11px">🔬 ${eq.name}</span>`
-              ).join('')}
+      return `
+      <div class="card" style="border-left:4px solid ${color};display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+            <div style="width:54px;height:54px;background:${color}20;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0">${emoji}</div>
+            <div style="flex:1">
+              <div style="font-size:18px;font-weight:700">${d.name}</div>
+              <div style="font-size:12px;color:var(--text-muted)">${d.description || 'Specialized Department'}</div>
             </div>
           </div>
-        ` : ''}
-      </div>
-    </div>`;
-  }).join('');
+
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
+            <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
+              <div style="font-size:18px;font-weight:800;color:${color}">${d.capacity}</div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:2px">CAPACITY</div>
+            </div>
+            <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
+              <div style="font-size:18px;font-weight:800;color:var(--text-primary)">${deptDocs.length}</div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:2px">DOCTORS</div>
+            </div>
+            <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
+              <div style="font-size:18px;font-weight:800;color:var(--text-primary)">${deptBeds.length}</div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:2px">BEDS (${occupiedBeds} occ)</div>
+            </div>
+            <div style="background:var(--bg-dark);border-radius:8px;padding:8px 4px;text-align:center">
+              <div style="font-size:18px;font-weight:800;color:var(--accent)">${deptEquip.length}</div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:2px">DEVICES</div>
+            </div>
+          </div>
+
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Physicians on duty:</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px">
+              ${deptDocs.map(doc =>
+                `<span style="background:${color}15;color:${color};border:1px solid ${color}30;padding:2px 8px;border-radius:20px;font-size:11px">${formatDoctorName(doc.name, true)}</span>`
+              ).join('') || '<span style="color:var(--text-muted);font-size:11px">None</span>'}
+            </div>
+          </div>
+
+          ${deptEquip.length ? `
+            <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Assigned Devices:</div>
+              <div style="display:flex;flex-wrap:wrap;gap:4px">
+                ${deptEquip.map(eq =>
+                  `<span style="background:#f1f5f9;border:1px solid #e2e8f0;color:var(--text-secondary);padding:3px 8px;border-radius:6px;font-size:11px">🔬 ${eq.name}</span>`
+                ).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;border-top:1px solid var(--border);padding-top:10px" data-permission="departments.manage">
+          <button class="btn btn-outline btn-sm" onclick="openEditDeptModal(${d.id}, '${escapeHtml(d.name)}', ${d.capacity}, '${escapeHtml(d.description || '')}')">
+            ✏️ Edit
+          </button>
+          <button class="btn btn-danger btn-sm" onclick="confirmDeleteDept(${d.id}, '${escapeHtml(d.name)}')">
+            🗑️ Delete
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+
+    applyPermissionGating();
+  } catch(e) {
+    ToastManager.show('Failed to load departments', 'error');
+  }
+}
+
+function openAddDeptModal() {
+  document.getElementById('dept-id').value = '';
+  document.getElementById('dept-name').value = '';
+  document.getElementById('dept-capacity').value = 50;
+  document.getElementById('dept-desc').value = '';
+  document.getElementById('dept-modal-title').textContent = '➕ Add Department';
+  document.getElementById('btn-save-dept').textContent = 'Create Department';
+  Modal.open('dept-modal');
+}
+
+function openEditDeptModal(id, name, capacity, desc) {
+  document.getElementById('dept-id').value = id;
+  document.getElementById('dept-name').value = name;
+  document.getElementById('dept-capacity').value = capacity;
+  document.getElementById('dept-desc').value = desc;
+  document.getElementById('dept-modal-title').textContent = '✏️ Edit Department';
+  document.getElementById('btn-save-dept').textContent = 'Save Changes';
+  Modal.open('dept-modal');
+}
+
+async function saveDepartment(e) {
+  e.preventDefault();
+  const id = document.getElementById('dept-id').value;
+  const name = document.getElementById('dept-name').value.trim();
+  const capacity = parseInt(document.getElementById('dept-capacity').value, 10);
+  const description = document.getElementById('dept-desc').value.trim();
+
+  if (!name) {
+    ToastManager.show('Department name is required', 'warning');
+    return;
+  }
+
+  try {
+    if (id) {
+      await API.put(`/api/departments/${id}`, { name, capacity, description });
+      ToastManager.show(`Department '${name}' updated successfully`, 'success');
+    } else {
+      await API.post('/api/departments', { name, capacity, description });
+      ToastManager.show(`Department '${name}' created successfully`, 'success');
+    }
+    Modal.close('dept-modal');
+    loadDepts();
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+  }
+}
+
+function confirmDeleteDept(id, name) {
+  deletingDeptId = id;
+  document.getElementById('delete-dept-name').textContent = name;
+  Modal.open('delete-dept-modal');
+}
+
+async function executeDeleteDepartment() {
+  if (!deletingDeptId) return;
+  try {
+    await API.delete(`/api/departments/${deletingDeptId}`);
+    ToastManager.show('Department deleted successfully', 'success');
+    Modal.close('delete-dept-modal');
+    loadDepts();
+  } catch(err) {
+    ToastManager.show(err.message, 'error');
+  } finally {
+    deletingDeptId = null;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', loadDepts);

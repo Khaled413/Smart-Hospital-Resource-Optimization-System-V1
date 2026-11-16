@@ -1210,6 +1210,52 @@ def api_add_department():
     return jsonify(dept.to_dict()), 201
 
 
+@app.route('/api/departments/<int:did>', methods=['PUT', 'PATCH'])
+@require_permission('departments.manage')
+def api_update_department(did):
+    dept = db.get_or_404(Department, did)
+    data = request.get_json() or {}
+    name = data.get('name')
+    if name and name != dept.name:
+        existing = Department.query.filter_by(name=name).first()
+        if existing and existing.id != did:
+            return jsonify({'error': f"Department '{name}' already exists"}), 409
+        dept.name = name
+    if 'capacity' in data:
+        dept.capacity = safe_int(data.get('capacity'), dept.capacity)
+    if 'description' in data:
+        dept.description = data.get('description', '')
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f"Department '{name}' already exists"}), 409
+
+    log_audit('UPDATE', 'department', dept.id, f"Updated department {dept.name}")
+    return jsonify(dept.to_dict())
+
+
+@app.route('/api/departments/<int:did>', methods=['DELETE'])
+@require_permission('departments.manage')
+def api_delete_department(did):
+    dept = db.get_or_404(Department, did)
+    if Doctor.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: physicians are currently assigned to it.'}), 400
+    if Room.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: rooms are currently assigned to it.'}), 400
+    if Bed.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: beds are currently assigned to it.'}), 400
+    if Equipment.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: medical devices are currently assigned to it.'}), 400
+
+    name = dept.name
+    db.session.delete(dept)
+    db.session.commit()
+    log_audit('DELETE', 'department', did, f"Deleted department {name}")
+    return jsonify({'message': f"Department '{name}' deleted successfully"})
+
+
 # ─── API: Inpatient Beds ──────────────────────────────────────────────────────
 
 @app.route('/api/beds', methods=['GET'])
