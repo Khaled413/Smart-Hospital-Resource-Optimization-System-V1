@@ -79,6 +79,9 @@ class Config:
     # Timezone Configuration (Africa/Cairo standard for hospital operations)
     APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'Africa/Cairo')
     
+    # Public Waiting Hall Kiosk Display Token (Read-Only)
+    KIOSK_VIEW_TOKEN = os.environ.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    
     # Demo Mode (Restricted read-only demo viewer)
     DEMO_MODE = os.environ.get('DEMO_MODE', 'false').lower() in ('true', '1', 'yes')
 

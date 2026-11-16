@@ -12,6 +12,7 @@ import os
 import re
 import hashlib
 import secrets
+from urllib.parse import quote_plus
 from functools import wraps
 
 from flask_limiter import Limiter
@@ -576,9 +577,89 @@ def simulator_page():
     return render_template('simulator.html')
 
 @app.route('/queue-display')
-@require_permission('queue_display.view')
 def queue_display_page():
-    return render_template('queue_display.html')
+    token = request.args.get('token')
+    configured_token = app.config.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    if token and secrets.compare_digest(token, configured_token):
+        return render_template('queue_display.html', kiosk_token=token)
+
+    user = get_current_user()
+    if not user:
+        return redirect('/login?next=' + quote_plus(request.full_path))
+    if not user.has_permission('queue_display.view'):
+        return render_template('error.html', code=403, message="Access Denied: You do not have permission to view the Queue Display."), 403
+    return render_template('queue_display.html', kiosk_token=None)
+
+
+@app.route('/api/queue-display/feed', methods=['GET'])
+def api_queue_display_feed():
+    token = request.args.get('token') or request.headers.get('X-Kiosk-Token')
+    configured_token = app.config.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    is_authenticated = False
+
+    if token and secrets.compare_digest(token, configured_token):
+        is_authenticated = True
+    else:
+        user = get_current_user()
+        if user and user.has_permission('queue_display.view'):
+            is_authenticated = True
+        elif user:
+            return jsonify({'error': 'Forbidden: missing queue_display.view permission'}), 403
+
+    if not is_authenticated:
+        return jsonify({'error': 'Unauthorized kiosk access'}), 401
+
+    target_date = request.args.get('date') or today_in_app_tz()
+
+    appts = Appointment.query.options(
+        joinedload(Appointment.patient),
+        joinedload(Appointment.doctor),
+        joinedload(Appointment.room)
+    ).filter(
+        Appointment.date == target_date,
+        Appointment.status.in_(['in_progress', 'scheduled'])
+    ).order_by(Appointment.start_time).all()
+
+    def serialize_feed_item(a):
+        p = a.patient
+        d = a.doctor
+        r = a.room
+        # Neutral priority mapping: Immediate, Priority, Regular
+        is_imm = bool(a.is_emergency or (p and p.priority in ('critical', 'emergency')))
+        if is_imm:
+            priority_label = 'Immediate'
+        elif p and p.priority == 'urgent':
+            priority_label = 'Priority'
+        else:
+            priority_label = 'Regular'
+
+        return {
+            'ticket': f"#{a.id}",
+            'id': a.id,
+            'patient_initials': mask_patient_name(p.name if p else 'Patient'),
+            'doctor_name': format_doctor_name(d.name, with_title=True) if d else 'Attending Physician',
+            'doctor_specialization': d.specialization if d else '',
+            'room_number': r.room_number if r else 'TBD',
+            'start_time': a.start_time,
+            'end_time': a.end_time,
+            'status': a.status,
+            'priority_label': priority_label,
+            'is_immediate': is_imm
+        }
+
+    serving = [serialize_feed_item(a) for a in appts if a.status == 'in_progress']
+    upcoming = [serialize_feed_item(a) for a in appts if a.status == 'scheduled']
+
+    return jsonify({
+        'serving': serving,
+        'upcoming': upcoming,
+        'date': target_date,
+        'server_time': utc_now().isoformat()
+    })
+
+
+queue_display_page._permission_protected = True
+api_queue_display_feed._permission_protected = True
 
 @app.route('/roles')
 @require_permission('roles.view')
