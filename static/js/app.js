@@ -17,6 +17,14 @@ function formatDoctorName(name, withTitle = true) {
   return withTitle ? `Dr. ${cleaned}` : cleaned;
 }
 
+// ── Global Visual Constants ──────────────────────────────────
+const PRIORITY_COLORS = {
+  critical: '#ef4444',
+  urgent: '#f59e0b',
+  normal: '#10b981',
+  low: '#64748b'
+};
+
 // ── Toast Notifications ──────────────────────────────────────
 const ToastManager = {
   container: null,
