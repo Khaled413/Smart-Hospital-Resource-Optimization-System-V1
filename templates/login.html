@@ -150,9 +150,9 @@ async function handleLogin(e) {
   try {
     const res = await API.post('/api/auth/login', { username: u, password: p });
     if (res.user && res.user.must_change_password) {
-      ToastManager.show('Initial login detected. Please set a new password.', 'warning');
+      ToastManager.show('Initial login detected. Please set a new password in Profile Settings.', 'warning');
       setTimeout(() => {
-        window.location.href = '/change-password';
+        window.location.href = '/profile?password_change_required=1';
       }, 700);
       return;
     }

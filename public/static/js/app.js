@@ -3,6 +3,28 @@
    MediOptim Pro - Smart Hospital Resource Optimization System
    ============================================================ */
 
+// ── Doctor Name Formatter Helper ──────────────────────────────
+function formatDoctorName(name, withTitle = true) {
+  if (!name) return '';
+  let cleaned = String(name).trim();
+  while (/^(?:dr\.|dr\b)\s*/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^(?:dr\.|dr\b)\s*/i, '').trim();
+  }
+  if (cleaned.toLowerCase() === 'dr' || cleaned.toLowerCase() === 'dr.') {
+    cleaned = '';
+  }
+  if (!cleaned) return '';
+  return withTitle ? `Dr. ${cleaned}` : cleaned;
+}
+
+// ── Global Visual Constants ──────────────────────────────────
+const PRIORITY_COLORS = {
+  critical: '#ef4444',
+  urgent: '#f59e0b',
+  normal: '#10b981',
+  low: '#64748b'
+};
+
 // ── Toast Notifications ──────────────────────────────────────
 const ToastManager = {
   container: null,
@@ -170,7 +192,17 @@ function minutesToTime(m) {
 }
 
 function todayISO() {
-  return new Date().toISOString().split('T')[0];
+  // Always compute today in Africa/Cairo (APP_TIMEZONE standard)
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Cairo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
+  } catch (e) {
+    return new Date().toISOString().split('T')[0];
+  }
 }
 
 function formatDate(dateStr) {
@@ -252,7 +284,7 @@ async function submitEmergencyWalkin(e) {
   try {
     const res = await API.post('/api/emergency/walkin', payload);
     Modal.close('emergency-modal');
-    ToastManager.show(`🚨 Code Red Admitted: Assigned to Dr. ${res.emergency_appointment.doctor_name} in Room ${res.emergency_appointment.room_number}`, 'success', 5000);
+    ToastManager.show(`🚨 Code Red Admitted: Assigned to ${formatDoctorName(res.emergency_appointment.doctor_name, true)} in Room ${res.emergency_appointment.room_number}`, 'success', 5000);
     if (res.bumped_notice) {
       setTimeout(() => {
         ToastManager.show(`⚠️ ${res.bumped_notice}`, 'warning', 6000);
@@ -279,11 +311,18 @@ async function checkAuthStatus() {
     if (res.authenticated && res.user) {
       const u = res.user;
       container.innerHTML = `
-        <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);padding:4px 10px;border-radius:20px;font-size:12px">
-          <span>👤</span>
-          <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
-          <span class="badge" style="background:#1a56db;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
-          <button onclick="logoutUser()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-left:4px" title="Sign Out">✕</button>
+        <div style="display:flex;align-items:center;gap:8px;background:#f8fafc;border:1px solid #cbd5e1;padding:4px 10px 4px 12px;border-radius:20px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,0.03)">
+          <a href="/profile" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;" title="Profile Settings & Account">
+            <span>👤</span>
+            <span style="font-weight:600;color:var(--text-primary)">${u.full_name}</span>
+            <span class="badge" style="background:#0284c7;color:#fff;font-size:10px;padding:2px 6px">${u.role.toUpperCase()}</span>
+          </a>
+          <a href="/profile" class="btn btn-outline btn-sm" style="padding:2px 6px;font-size:11px;color:var(--text-secondary);text-decoration:none;border-radius:6px;display:flex;align-items:center;gap:3px" title="User Profile & Security Settings">
+            ⚙️ <span class="hide-mobile-text">Settings</span>
+          </a>
+          <button onclick="confirmLogout()" class="btn btn-outline btn-sm" style="background:#fef2f2;border-color:#fecaca;color:#dc2626;cursor:pointer;font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;display:flex;align-items:center;gap:4px" title="Sign Out of MediOptim Pro">
+            🚪 <span>Sign Out</span>
+          </button>
         </div>
       `;
     } else {
@@ -295,6 +334,12 @@ async function checkAuthStatus() {
     }
   } catch(e) {
     console.error('Auth check error', e);
+  }
+}
+
+async function confirmLogout() {
+  if (confirm('Are you sure you want to sign out of MediOptim Pro?')) {
+    await logoutUser();
   }
 }
 

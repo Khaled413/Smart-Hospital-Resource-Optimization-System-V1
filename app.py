@@ -5,15 +5,19 @@ Crisis Simulation, Export, and Optimization Services.
 """
 
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response, send_from_directory, g
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import csv
 import io
 import os
+import re
+import hashlib
 import secrets
+from urllib.parse import quote_plus
 from functools import wraps
 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_migrate import Migrate
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
@@ -21,7 +25,9 @@ from config import get_config, config_by_name
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment,
     Appointment, OptimizationRun, User, AuditLog,
-    Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name
+    Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name, utc_now,
+    validate_password_complexity, generate_secure_temporary_password, format_doctor_name,
+    today_in_app_tz, now_in_app_tz
 )
 from permissions import (
     PERMISSION_CATALOG, PERMISSION_MAP, PERMISSION_GROUPS,
@@ -34,6 +40,7 @@ from optimizer import (
     time_to_minutes, minutes_to_time
 )
 from seed_data import seed_database
+from metrics_service import MetricsService
 
 # ─── App Factory / Configuration ──────────────────────────────────────────────
 
@@ -64,46 +71,25 @@ def ratelimit_handler(e):
         return jsonify({'error': 'Too many requests. Please wait a moment and try again.'}), 429
     return render_template('login.html', error='Too many requests. Please wait a moment and try again.'), 429
 
-# Handle Vercel / Serverless database persistence & pre-seeding
-IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
+db.init_app(app)
+migrate = Migrate(app, db)
 
-if IS_VERCEL:
-    import tempfile
-    import shutil
-    tmp_db = os.path.join(tempfile.gettempdir(), 'hospital.db')
-    repo_db = os.path.join(app.root_path, 'instance', 'hospital.db')
-    if os.path.exists(repo_db) and not os.path.exists(tmp_db):
-        try:
-            shutil.copy2(repo_db, tmp_db)
-        except Exception:
-            pass
-else:
+# Ensure local dev instance directory exists when using SQLite
+if not app.config.get('SQLALCHEMY_DATABASE_URI', '').startswith('postgresql'):
     try:
         os.makedirs(os.path.join(app.root_path, 'instance'), exist_ok=True)
     except Exception:
         pass
 
-db.init_app(app)
 
-with app.app_context():
-    try:
-        # Lightweight schema migration for SQLite columns
-        try:
-            with db.engine.connect() as conn:
-                res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
-                cols = [r[1] for r in res]
-                if cols:
-                    if 'role_id' not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN role_id INTEGER REFERENCES roles(id)"))
-                    if 'permissions_version' not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN permissions_version INTEGER DEFAULT 1"))
-                    conn.commit()
-        except Exception:
-            pass
-        db.create_all()
+@app.cli.command('seed')
+def seed_cli():
+    """Explicit idempotent CLI seeding command for permissions, system roles, and baseline hospital data."""
+    with app.app_context():
+        from seed_data import seed_database
+        print("[CLI] Commencing explicit database seeding...")
         seed_database()
-    except Exception as e:
-        print(f"Database initialization note: {e}")
+        print("[CLI] Database seeding completed successfully.")
 
 
 @app.route('/favicon.ico')
@@ -190,33 +176,88 @@ from zoneinfo import ZoneInfo
 
 
 def get_current_datetime():
-    """Return timezone-aware current datetime based on APP_TIMEZONE."""
+    """Return timezone-aware current datetime based on APP_TIMEZONE (Africa/Cairo)."""
     tz_str = app.config.get('APP_TIMEZONE', 'Africa/Cairo') if app else 'Africa/Cairo'
-    try:
-        return datetime.now(ZoneInfo(tz_str))
-    except Exception:
-        return datetime.now()
+    return now_in_app_tz(tz_str)
 
 
 def get_current_date():
-    """Return current date string YYYY-MM-DD in configured timezone."""
-    return get_current_datetime().strftime('%Y-%m-%d')
+    """Return current date string YYYY-MM-DD in APP_TIMEZONE (Africa/Cairo)."""
+    tz_str = app.config.get('APP_TIMEZONE', 'Africa/Cairo') if app else 'Africa/Cairo'
+    return today_in_app_tz(tz_str)
 
 
 def get_current_user():
-    """Return the currently authenticated User instance or None."""
-    if hasattr(g, 'current_user'):
-        return g.current_user
+    """
+    Return the currently authenticated User instance or None.
+    Invalidates session immediately if password has been changed or reset elsewhere.
+    """
     user_id = session.get('user_id')
     if not user_id:
         g.current_user = None
         return None
+
+    if getattr(g, 'current_user', None) and getattr(g.current_user, 'id', None) == user_id:
+        # Check password hash synchronization to invalidate concurrent sessions
+        pwd_hash = session.get('pwd_hash')
+        if pwd_hash and g.current_user.password_hash:
+            curr_hash = hashlib.sha256(g.current_user.password_hash.encode()).hexdigest()[:16]
+            if pwd_hash != curr_hash:
+                session.clear()
+                g.current_user = None
+                return None
+        return g.current_user
+
     user = db.session.get(User, user_id)
     if not user or not user.is_active:
         g.current_user = None
         return None
+
+    # Verify session password digest against database password_hash
+    pwd_hash = session.get('pwd_hash')
+    if pwd_hash and user.password_hash:
+        curr_hash = hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
+        if pwd_hash != curr_hash:
+            session.clear()
+            g.current_user = None
+            return None
+
     g.current_user = user
     return user
+
+
+@app.before_request
+def enforce_must_change_password():
+    """
+    Intercept all authenticated requests for users flagged with must_change_password=True.
+    Forces redirect to Profile Settings until a compliant password is created.
+    """
+    user = get_current_user()
+    if not user or not getattr(user, 'must_change_password', False):
+        return None
+
+    # Whitelisted routes while password change is pending
+    allowed_exact = {
+        '/profile',
+        '/change-password',
+        '/api/auth/change-password',
+        '/api/auth/logout',
+        '/api/user/profile',
+        '/login',
+        '/api/auth/login',
+        '/favicon.ico'
+    }
+    if request.path in allowed_exact or request.path.startswith('/static/'):
+        return None
+
+    if request.path.startswith('/api/'):
+        return jsonify({
+            'error': 'PasswordChangeRequired',
+            'message': 'You must change your temporary password before accessing the system.',
+            'redirect': '/profile'
+        }), 403
+
+    return redirect(url_for('profile_page', password_change_required=1))
 
 
 def get_user_effective_permissions(user):
@@ -440,7 +481,9 @@ def inject_rbac_helpers():
         current_user=user,
         can=can,
         can_any=can_any,
-        user_permissions=sorted(list(user_perms))
+        user_permissions=sorted(list(user_perms)),
+        format_doctor_name=format_doctor_name,
+        today_in_app_tz=today_in_app_tz
     )
 
 
@@ -471,7 +514,10 @@ def index():
 
 @app.route('/login')
 def login_page():
-    if 'user_id' in session and get_current_user():
+    user = get_current_user()
+    if user:
+        if getattr(user, 'must_change_password', False):
+            return redirect(url_for('profile_page', password_change_required=1))
         return redirect(url_for('index'))
     return render_template('login.html')
 
@@ -531,9 +577,89 @@ def simulator_page():
     return render_template('simulator.html')
 
 @app.route('/queue-display')
-@require_permission('queue_display.view')
 def queue_display_page():
-    return render_template('queue_display.html')
+    token = request.args.get('token')
+    configured_token = app.config.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    if token and secrets.compare_digest(token, configured_token):
+        return render_template('queue_display.html', kiosk_token=token)
+
+    user = get_current_user()
+    if not user:
+        return redirect('/login?next=' + quote_plus(request.full_path))
+    if not user.has_permission('queue_display.view'):
+        return render_template('error.html', code=403, message="Access Denied: You do not have permission to view the Queue Display."), 403
+    return render_template('queue_display.html', kiosk_token=None)
+
+
+@app.route('/api/queue-display/feed', methods=['GET'])
+def api_queue_display_feed():
+    token = request.args.get('token') or request.headers.get('X-Kiosk-Token')
+    configured_token = app.config.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    is_authenticated = False
+
+    if token and secrets.compare_digest(token, configured_token):
+        is_authenticated = True
+    else:
+        user = get_current_user()
+        if user and user.has_permission('queue_display.view'):
+            is_authenticated = True
+        elif user:
+            return jsonify({'error': 'Forbidden: missing queue_display.view permission'}), 403
+
+    if not is_authenticated:
+        return jsonify({'error': 'Unauthorized kiosk access'}), 401
+
+    target_date = request.args.get('date') or today_in_app_tz()
+
+    appts = Appointment.query.options(
+        joinedload(Appointment.patient),
+        joinedload(Appointment.doctor),
+        joinedload(Appointment.room)
+    ).filter(
+        Appointment.date == target_date,
+        Appointment.status.in_(['in_progress', 'scheduled'])
+    ).order_by(Appointment.start_time).all()
+
+    def serialize_feed_item(a):
+        p = a.patient
+        d = a.doctor
+        r = a.room
+        # Neutral priority mapping: Immediate, Priority, Regular
+        is_imm = bool(a.is_emergency or (p and p.priority in ('critical', 'emergency')))
+        if is_imm:
+            priority_label = 'Immediate'
+        elif p and p.priority == 'urgent':
+            priority_label = 'Priority'
+        else:
+            priority_label = 'Regular'
+
+        return {
+            'ticket': f"#{a.id}",
+            'id': a.id,
+            'patient_initials': mask_patient_name(p.name if p else 'Patient'),
+            'doctor_name': format_doctor_name(d.name, with_title=True) if d else 'Attending Physician',
+            'doctor_specialization': d.specialization if d else '',
+            'room_number': r.room_number if r else 'TBD',
+            'start_time': a.start_time,
+            'end_time': a.end_time,
+            'status': a.status,
+            'priority_label': priority_label,
+            'is_immediate': is_imm
+        }
+
+    serving = [serialize_feed_item(a) for a in appts if a.status == 'in_progress']
+    upcoming = [serialize_feed_item(a) for a in appts if a.status == 'scheduled']
+
+    return jsonify({
+        'serving': serving,
+        'upcoming': upcoming,
+        'date': target_date,
+        'server_time': utc_now().isoformat()
+    })
+
+
+queue_display_page._permission_protected = True
+api_queue_display_feed._permission_protected = True
 
 @app.route('/roles')
 @require_permission('roles.view')
@@ -578,8 +704,14 @@ def api_login():
     ).first()
     if user:
         # Check if account is temporarily locked
-        if user.locked_until and user.locked_until > datetime.utcnow():
-            mins_left = max(1, int((user.locked_until - datetime.utcnow()).total_seconds() / 60))
+        now = utc_now()
+        # Handle both timezone-aware and legacy naive locked_until timestamps safely
+        locked_until = user.locked_until
+        if locked_until and locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+
+        if locked_until and locked_until > now:
+            mins_left = max(1, int((locked_until - now).total_seconds() / 60))
             return jsonify({
                 'error': f'Account is temporarily locked due to multiple failed login attempts. Try again in {mins_left} minute(s).'
             }), 403
@@ -588,25 +720,10 @@ def api_login():
             return jsonify({'error': 'Account has been disabled. Contact system administrator.'}), 403
 
         is_valid = user.check_password(password)
-        # Compatibility fallback for standard seed credentials across environments
-        if not is_valid:
-            legacy_defaults = {
-                'admin': ('Admin#2025!', 'admin123', 'admin'),
-                'manager': ('Manager#2025!', 'manager123'),
-                'dr_sarah': ('Doctor#2025!', 'doctor123'),
-                'receptionist': ('Reception#2025!', 'reception123'),
-                'demo_viewer': ('DemoViewer#2025!', 'demoviewer')
-            }
-            allowed_alts = legacy_defaults.get(user.username.lower(), ())
-            if password in allowed_alts:
-                is_valid = True
-                user.set_password(password)
-                db.session.commit()
-
         if not is_valid:
             user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
             if user.failed_login_attempts >= 5:
-                user.locked_until = datetime.utcnow() + timedelta(minutes=15)
+                user.locked_until = now + timedelta(minutes=15)
                 db.session.commit()
                 log_audit('LOCKOUT', 'user', user.id, f"User {user.username} locked out after 5 consecutive failed login attempts")
                 return jsonify({
@@ -628,9 +745,16 @@ def api_login():
     session['username'] = user.username
     session['role'] = user.role
     session['full_name'] = user.full_name or user.username
+    session['pwd_hash'] = hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
 
     log_audit('LOGIN', 'user', user.id, f"User {user.username} logged in successfully")
-    return jsonify({'message': 'Logged in successfully', 'user': user.to_dict()})
+    redirect_target = '/profile' if user.must_change_password else '/'
+    return jsonify({
+        'message': 'Logged in successfully',
+        'must_change_password': user.must_change_password,
+        'redirect': redirect_target,
+        'user': user.to_dict()
+    })
 
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -661,6 +785,7 @@ api_me._permission_protected = True
 
 
 @app.route('/api/auth/change-password', methods=['POST'])
+@limiter.limit("5 per minute", key_func=get_remote_address)
 @login_required
 def api_change_password():
     user = get_current_user()
@@ -677,14 +802,24 @@ def api_change_password():
     if not user.check_password(old_password):
         return jsonify({'error': 'Current password is incorrect'}), 400
 
-    if len(new_password) < 8:
-        return jsonify({'error': 'New password must be at least 8 characters long'}), 400
+    if old_password == new_password:
+        return jsonify({'error': 'New password must be different from current password'}), 400
+
+    is_valid, err_msg = validate_password_complexity(new_password, user=user)
+    if not is_valid:
+        return jsonify({'error': 'WeakPassword', 'message': err_msg}), 400
 
     user.set_password(new_password)
     user.must_change_password = False
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.permissions_version = (user.permissions_version or 1) + 1
     db.session.commit()
 
-    log_audit('PASSWORD_CHANGE', 'user', user.id, f"User {user.username} updated password")
+    # Synchronize current session's password hash so it remains valid while invalidating other sessions
+    session['pwd_hash'] = hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
+
+    log_audit('PASSWORD_CHANGE', 'user', user.id, f"User {user.username} successfully updated password")
     return jsonify({
         'message': 'Password updated successfully',
         'must_change_password': False
@@ -704,7 +839,7 @@ def api_get_profile():
             'id': user.doctor.id,
             'name': user.doctor.name,
             'specialization': user.doctor.specialization,
-            'department_name': user.doctor.department.name if user.doctor.department else ''
+            'department_name': user.doctor.dept.name if (user.doctor and user.doctor.dept) else ''
         }
     return jsonify({'success': True, 'user': data})
 
@@ -758,73 +893,8 @@ def api_update_profile():
 @app.route('/api/dashboard')
 @require_permission('dashboard.view')
 def api_dashboard():
-    today = get_current_date()
-    total_patients = Patient.query.count()
-    total_doctors = Doctor.query.count()
-    total_rooms = Room.query.count()
-    total_depts = Department.query.count()
-    total_beds = Bed.query.count()
-    occupied_beds = Bed.query.filter_by(status='occupied').count()
-    total_equipment = Equipment.query.count()
-    avail_equipment = Equipment.query.filter_by(status='available').count()
-
-    appointments_today = Appointment.query.filter_by(date=today).count()
-    emergencies_today = Appointment.query.filter_by(date=today, is_emergency=True).count()
-
-    today_appts = Appointment.query.filter_by(date=today).all()
-    avg_wait = (sum(a.waiting_time for a in today_appts) / len(today_appts)) if today_appts else 0
-
-    doctors = Doctor.query.all()
-    total_avail_minutes = sum(
-        (time_to_minutes(d.available_until) - time_to_minutes(d.available_from))
-        for d in doctors
-    )
-    scheduled_today_appts = Appointment.query.filter_by(date=today, status='scheduled').all()
-    booked_today_minutes = sum(a.duration_minutes for a in scheduled_today_appts)
-    utilization = round((booked_today_minutes / total_avail_minutes * 100), 1) if total_avail_minutes > 0 else 0
-
-    priority_dist = dict(
-        db.session.query(Patient.priority, db.func.count(Patient.id))
-        .group_by(Patient.priority).all()
-    )
-
-    dept_counts = (
-        db.session.query(Department.name, db.func.count(Appointment.id))
-        .join(Doctor, Doctor.department_id == Department.id)
-        .join(Appointment, Appointment.doctor_id == Doctor.id)
-        .group_by(Department.name).all()
-    )
-    dept_workload = {name: count for name, count in dept_counts}
-
-    doc_today_counts = dict(
-        db.session.query(Appointment.doctor_id, db.func.count(Appointment.id))
-        .filter(Appointment.date == today)
-        .group_by(Appointment.doctor_id).all()
-    )
-    doctor_util = []
-    for doc in doctors:
-        booked = doc_today_counts.get(doc.id, 0)
-        util_pct = round((booked / doc.max_patients_per_day) * 100, 1) if doc.max_patients_per_day else 0
-        doctor_util.append({'name': doc.name, 'utilization': util_pct, 'booked': booked, 'spec': doc.specialization})
-
-    return jsonify({
-        'total_patients': total_patients,
-        'total_doctors': total_doctors,
-        'total_rooms': total_rooms,
-        'total_departments': total_depts,
-        'total_beds': total_beds,
-        'occupied_beds': occupied_beds,
-        'bed_occupancy_rate': round((occupied_beds / total_beds * 100), 1) if total_beds > 0 else 0,
-        'total_equipment': total_equipment,
-        'available_equipment': avail_equipment,
-        'appointments_today': appointments_today,
-        'emergencies_today': emergencies_today,
-        'avg_wait_time': round(avg_wait, 1),
-        'utilization_rate': utilization,
-        'priority_distribution': priority_dist,
-        'department_workload': dept_workload,
-        'doctor_utilization': doctor_util
-    })
+    target_date = request.args.get('date') or today_in_app_tz()
+    return jsonify(MetricsService.get_dashboard_summary(target_date))
 
 
 # ─── API: Patients ────────────────────────────────────────────────────────────
@@ -868,7 +938,7 @@ def api_add_patient():
         heart_rate=safe_int(data.get('heart_rate'), 75),
         spo2=safe_int(data.get('spo2'), 98),
         temperature=safe_float(data.get('temperature'), 37.0),
-        registered_at=datetime.utcnow()
+        registered_at=utc_now()
     )
     patient.no_show_risk = predict_no_show_risk(patient)
     db.session.add(patient)
@@ -1140,6 +1210,52 @@ def api_add_department():
     return jsonify(dept.to_dict()), 201
 
 
+@app.route('/api/departments/<int:did>', methods=['PUT', 'PATCH'])
+@require_permission('departments.manage')
+def api_update_department(did):
+    dept = db.get_or_404(Department, did)
+    data = request.get_json() or {}
+    name = data.get('name')
+    if name and name != dept.name:
+        existing = Department.query.filter_by(name=name).first()
+        if existing and existing.id != did:
+            return jsonify({'error': f"Department '{name}' already exists"}), 409
+        dept.name = name
+    if 'capacity' in data:
+        dept.capacity = safe_int(data.get('capacity'), dept.capacity)
+    if 'description' in data:
+        dept.description = data.get('description', '')
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f"Department '{name}' already exists"}), 409
+
+    log_audit('UPDATE', 'department', dept.id, f"Updated department {dept.name}")
+    return jsonify(dept.to_dict())
+
+
+@app.route('/api/departments/<int:did>', methods=['DELETE'])
+@require_permission('departments.manage')
+def api_delete_department(did):
+    dept = db.get_or_404(Department, did)
+    if Doctor.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: physicians are currently assigned to it.'}), 400
+    if Room.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: rooms are currently assigned to it.'}), 400
+    if Bed.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: beds are currently assigned to it.'}), 400
+    if Equipment.query.filter_by(department_id=did).first():
+        return jsonify({'error': 'Cannot delete department: medical devices are currently assigned to it.'}), 400
+
+    name = dept.name
+    db.session.delete(dept)
+    db.session.commit()
+    log_audit('DELETE', 'department', did, f"Deleted department {name}")
+    return jsonify({'message': f"Department '{name}' deleted successfully"})
+
+
 # ─── API: Inpatient Beds ──────────────────────────────────────────────────────
 
 @app.route('/api/beds', methods=['GET'])
@@ -1366,7 +1482,7 @@ def api_emergency_walkin():
     age = safe_int(data.get('age'), 40)
     gender = data.get('gender', 'Unknown')
     condition = data.get('condition_description', 'Acute Code Red Walk-in')
-    today_iso = date.today().isoformat()
+    today_iso = today_in_app_tz()
 
     # 1. Register emergency patient immediately
     patient = Patient(
@@ -1383,7 +1499,7 @@ def api_emergency_walkin():
         spo2=safe_int(data.get('spo2'), 92),
         temperature=safe_float(data.get('temperature'), 37.5),
         no_show_risk=0.01,
-        registered_at=datetime.utcnow()
+        registered_at=utc_now()
     )
     db.session.add(patient)
     db.session.flush()
@@ -1461,7 +1577,7 @@ def api_emergency_walkin():
 def api_optimize():
     data = request.get_json() or {}
     algorithm = data.get('algorithm', 'hybrid')
-    target_date = data.get('date', date.today().isoformat())
+    target_date = data.get('date') or today_in_app_tz()
     clear_existing = data.get('clear_existing', False)
 
     patients = Patient.query.all()
@@ -1487,6 +1603,9 @@ def api_optimize():
             'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0, 'utilization_rate': 0.0, 'avg_wait_time': 0.0},
             'assignments': [],
             'unassigned': [],
+            'unassigned_details': [],
+            'skipped_count': 0,
+            'skipped_reasons': {},
             'log': [f'ℹ️ All eligible patients are already scheduled for {target_date}. To reschedule, enable clear existing appointments.']
         })
 
@@ -1503,6 +1622,9 @@ def api_optimize():
             'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0, 'utilization_rate': 0.0, 'avg_wait_time': 0.0},
             'assignments': [],
             'unassigned': [],
+            'unassigned_details': [],
+            'skipped_count': 0,
+            'skipped_reasons': {},
             'log': [f'ℹ️ No eligible unscheduled patients available for {target_date}. To reschedule, enable clear existing appointments.']
         })
 
@@ -1558,7 +1680,7 @@ def api_optimize():
         {
             'patient_name': a['patient'].name,
             'patient_priority': a['patient'].priority,
-            'doctor_name': a['doctor'].name,
+            'doctor_name': format_doctor_name(a['doctor'].name, with_title=True),
             'room_number': a['room'].room_number,
             'date': a['date'],
             'start_time': a['start_time'],
@@ -1585,6 +1707,9 @@ def api_optimize():
         'metrics': result['metrics'],
         'assignments': assignments_out,
         'unassigned': unassigned_out,
+        'unassigned_details': result.get('unassigned_details', []),
+        'skipped_count': result.get('skipped_count', len(unassigned_out)),
+        'skipped_reasons': result.get('skipped_reasons', {}),
         'log': result['log']
     })
 
@@ -1595,7 +1720,7 @@ def api_optimize():
 @require_permission('simulation.run')
 def api_run_simulation():
     data = request.get_json() or {}
-    target_date = data.get('date', date.today().isoformat())
+    target_date = data.get('date') or today_in_app_tz()
     absent_doctor_ids = data.get('absent_doctor_ids', [])
     disabled_room_ids = data.get('disabled_room_ids', [])
     patient_surge_percent = int(data.get('patient_surge_percent', 0))
@@ -1604,11 +1729,18 @@ def api_run_simulation():
     doctors = Doctor.query.all()
     rooms = Room.query.all()
 
+    existing_appts = Appointment.query.filter_by(date=target_date).all()
+    eligible_patients = [
+        p for p in patients
+        if not p.preferred_date or p.preferred_date == target_date
+    ]
+
     res = run_scenario_simulation(
-        patients, doctors, rooms, target_date,
+        eligible_patients, doctors, rooms, target_date,
         absent_doctor_ids=absent_doctor_ids,
         disabled_room_ids=disabled_room_ids,
-        patient_surge_percent=patient_surge_percent
+        patient_surge_percent=patient_surge_percent,
+        existing_appointments=existing_appts
     )
 
     log_audit('SIMULATE', 'simulation', None, f"Crisis simulation run (surge={patient_surge_percent}%, absent_docs={len(absent_doctor_ids)})")
@@ -1620,48 +1752,22 @@ def api_run_simulation():
 @app.route('/api/analytics/wait-time')
 @require_permission('analytics.view')
 def api_analytics_wait_time():
-    result = {}
-    for priority in ['critical', 'urgent', 'normal', 'low']:
-        appts = db.session.query(Appointment).join(Patient).filter(Patient.priority == priority).all()
-        if appts:
-            avg = sum(a.waiting_time for a in appts) / len(appts)
-            result[priority] = round(avg, 1)
-        else:
-            result[priority] = 0
-    return jsonify(result)
+    target_date = request.args.get('date')
+    return jsonify(MetricsService.get_wait_time_by_priority(target_date))
 
 
 @app.route('/api/analytics/utilization')
 @require_permission('analytics.view')
 def api_analytics_utilization():
-    target_date = request.args.get('date', date.today().isoformat())
-    doctors = Doctor.query.all()
-    util_data = []
-    for doc in doctors:
-        avail_mins = time_to_minutes(doc.available_until) - time_to_minutes(doc.available_from)
-        total_slots = avail_mins // 30
-        doc_appts = Appointment.query.filter_by(doctor_id=doc.id, date=target_date, status='scheduled').all()
-        booked_mins = sum(a.duration_minutes for a in doc_appts)
-        util_pct = round((booked_mins / avail_mins * 100), 1) if avail_mins > 0 else 0
-        util_data.append({
-            'doctor': doc.name,
-            'specialization': doc.specialization,
-            'booked': len(doc_appts),
-            'booked_minutes': booked_mins,
-            'total_slots': total_slots,
-            'utilization': min(util_pct, 100)
-        })
-    return jsonify(util_data)
+    target_date = request.args.get('date') or today_in_app_tz()
+    return jsonify(MetricsService.get_doctor_utilization(target_date))
 
 
 @app.route('/api/analytics/patients-status')
 @require_permission('analytics.view')
 def api_analytics_patients_status():
-    all_patients = Patient.query.all()
-    assigned_ids = {a.patient_id for a in Appointment.query.filter_by(status='scheduled').all()}
-    assigned = len([p for p in all_patients if p.id in assigned_ids])
-    unassigned = len(all_patients) - assigned
-    return jsonify({'assigned': assigned, 'unassigned': unassigned})
+    target_date = request.args.get('date')
+    return jsonify(MetricsService.get_patient_status_counts(target_date))
 
 
 @app.route('/api/optimization-runs')
@@ -1692,7 +1798,7 @@ def sanitize_csv_cell(val):
 @app.route('/api/export/appointments/csv')
 @require_permission('export.csv')
 def export_appointments_csv():
-    target_date = request.args.get('date', date.today().isoformat())
+    target_date = request.args.get('date') or today_in_app_tz()
     appts = Appointment.query.filter_by(date=target_date).order_by(Appointment.start_time).all()
 
     output = io.StringIO()
@@ -1888,8 +1994,10 @@ def api_create_user():
 
     if not username or not email or not password:
         return jsonify({'error': 'Username, email, and password are required'}), 400
-    if len(password) < 8:
-        return jsonify({'error': 'Password must be at least 8 characters long'}), 400
+
+    is_valid, err_msg = validate_password_complexity(password)
+    if not is_valid:
+        return jsonify({'error': 'WeakPassword', 'message': err_msg}), 400
 
     if User.query.filter_by(username=username).first():
         return jsonify({'error': f"Username '{username}' is already taken"}), 409
@@ -1990,6 +2098,42 @@ def api_toggle_user_status(uid):
     db.session.commit()
 
     return jsonify(target_user.to_dict(include_permissions=True))
+
+
+@app.route('/api/users/<int:uid>/reset-password', methods=['POST'])
+@require_permission('users.manage')
+def api_reset_user_password(uid):
+    """
+    Administrator action to generate a one-time random temporary password for a staff member.
+    Enforces must_change_password=True, resets lockouts, and writes audit logs.
+    """
+    current_admin = get_current_user()
+    ok, err_msg = verify_step_up_auth(current_admin)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    target_user = db.get_or_404(User, uid)
+    temp_password = generate_secure_temporary_password(14)
+    target_user.set_password(temp_password)
+    target_user.must_change_password = True
+    target_user.failed_login_attempts = 0
+    target_user.locked_until = None
+    target_user.permissions_version = (target_user.permissions_version or 1) + 1
+    db.session.commit()
+
+    log_audit(
+        'PASSWORD_RESET_ADMIN',
+        'user',
+        target_user.id,
+        f"Administrator {current_admin.username} reset password for {target_user.username}"
+    )
+
+    return jsonify({
+        'message': f"Temporary password generated for {target_user.username}. Share it with the user securely. It will be shown only once.",
+        'temporary_password': temp_password,
+        'user_id': target_user.id,
+        'username': target_user.username
+    }), 200
 
 
 @app.route('/api/users/<int:uid>/overrides', methods=['POST'])

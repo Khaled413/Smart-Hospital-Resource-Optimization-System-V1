@@ -185,12 +185,7 @@
 </div>
 
 <script>
-function maskName(name) {
-  if (!name) return 'Patient';
-  const parts = name.trim().split(' ');
-  if (parts.length === 1) return parts[0][0] + '***';
-  return parts[0][0] + '*** ' + parts[parts.length - 1][0] + '.';
-}
+const kioskToken = {{ (kiosk_token or '')|tojson }};
 
 function updateClock() {
   const now = new Date();
@@ -202,30 +197,45 @@ function updateClock() {
 setInterval(updateClock, 1000);
 updateClock();
 
+function getBadgeHtml(priorityLabel, isImmediate) {
+  if (isImmediate || priorityLabel === 'Immediate') {
+    return '<span class="badge" style="display:inline-block;padding:3px 8px;border-radius:6px;background:#fee2e2;color:#dc2626;font-size:11px;font-weight:700">🚨 IMMEDIATE</span>';
+  } else if (priorityLabel === 'Priority') {
+    return '<span class="badge" style="display:inline-block;padding:3px 8px;border-radius:6px;background:#fef3c7;color:#d97706;font-size:11px;font-weight:700">⚡ PRIORITY</span>';
+  } else {
+    return '<span class="badge" style="display:inline-block;padding:3px 8px;border-radius:6px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:700">REGULAR</span>';
+  }
+}
+
 async function fetchQueue() {
   try {
-    const res = await fetch('/api/appointments');
-    const appts = await res.json();
-    const today = new Date().toISOString().split('T')[0];
-    const todayAppts = appts.filter(a => a.date === today && a.status !== 'cancelled');
-
-    const serving = todayAppts.slice(0, 6);
-    const nextInLine = todayAppts.slice(6, 16);
+    const url = kioskToken ? `/api/queue-display/feed?token=${encodeURIComponent(kioskToken)}` : '/api/queue-display/feed';
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        document.getElementById('serving-container').innerHTML = '<div class="empty-state" style="padding:32px;text-align:center;color:#dc2626"><div class="empty-title" style="font-weight:600">Access Restricted — Authentication Required</div></div>';
+        document.getElementById('next-container').innerHTML = '<div class="empty-state" style="padding:24px;text-align:center;color:#dc2626"><div class="empty-desc">Please supply a valid kiosk display token.</div></div>';
+      }
+      return;
+    }
+    const data = await res.json();
+    const serving = data.serving || [];
+    const upcoming = data.upcoming || [];
 
     const sContainer = document.getElementById('serving-container');
     if (!serving.length) {
       sContainer.innerHTML = '<div class="empty-state" style="padding:32px;text-align:center;color:#64748b"><div class="empty-title" style="font-weight:600">No active consultations in progress</div></div>';
     } else {
-      sContainer.innerHTML = serving.map((a, i) => `
-        <div class="serving-row ${a.is_emergency ? 'emergency' : ''}">
-          <div style="font-size:22px;font-weight:800;color:${a.is_emergency ? '#dc2626' : '#0284c7'}">#${a.id}</div>
+      sContainer.innerHTML = serving.map(a => `
+        <div class="serving-row ${a.is_immediate ? 'emergency' : ''}">
+          <div style="font-size:22px;font-weight:800;color:${a.is_immediate ? '#dc2626' : '#0284c7'}">${a.ticket}</div>
           <div>
-            <div style="font-size:17px;font-weight:700;color:#0f172a">${maskName(a.patient_name)}</div>
-            ${a.is_emergency ? '<span style="font-size:11px;color:#dc2626;font-weight:800">🚨 EMERGENCY CODE RED</span>' : ''}
+            <div style="font-size:17px;font-weight:700;color:#0f172a">${a.patient_initials}</div>
+            <div style="margin-top:4px">${getBadgeHtml(a.priority_label, a.is_immediate)}</div>
           </div>
           <div>
             <div style="font-weight:600;color:#1e293b">${a.doctor_name}</div>
-            <div style="font-size:12px;color:#64748b">${a.doctor_specialization}</div>
+            <div style="font-size:12px;color:#64748b">${a.doctor_specialization || 'General Consultation'}</div>
           </div>
           <div>
             <div style="font-size:19px;font-weight:800;color:#0d9488">Room ${a.room_number}</div>
@@ -236,14 +246,15 @@ async function fetchQueue() {
     }
 
     const nContainer = document.getElementById('next-container');
-    if (!nextInLine.length) {
+    if (!upcoming.length) {
       nContainer.innerHTML = '<div class="empty-state" style="padding:24px;text-align:center;color:#64748b"><div class="empty-desc">No upcoming patients in queue</div></div>';
     } else {
-      nContainer.innerHTML = nextInLine.map(a => `
+      nContainer.innerHTML = upcoming.map(a => `
         <div class="next-item">
           <div>
-            <span style="font-weight:800;color:#0284c7;margin-right:8px">#${a.id}</span>
-            <span style="font-weight:600;color:#1e293b">${maskName(a.patient_name)}</span>
+            <span style="font-weight:800;color:#0284c7;margin-right:8px">${a.ticket}</span>
+            <span style="font-weight:600;color:#1e293b">${a.patient_initials}</span>
+            <span style="margin-left:6px">${getBadgeHtml(a.priority_label, a.is_immediate)}</span>
           </div>
           <div style="color:#64748b;font-size:13px;font-weight:600">${a.start_time} <span style="color:#0d9488">(Rm ${a.room_number})</span></div>
         </div>

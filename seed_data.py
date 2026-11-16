@@ -3,7 +3,11 @@ seed_data.py - Enhanced Sample Data Seeder for Smart Hospital Resource Optimizat
 Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Beds, Equipment, and Patients with clinical vitals.
 """
 
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, User, Appointment, OptimizationRun, Permission, Role, UserPermissionOverride
+from models import (
+    db, Department, Doctor, Patient, Room, Bed, Equipment, User,
+    Appointment, OptimizationRun, Permission, Role, UserPermissionOverride, utc_now,
+    generate_secure_temporary_password, format_doctor_name, today_in_app_tz, now_in_app_tz
+)
 from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
 from datetime import datetime, date, timedelta
@@ -96,47 +100,63 @@ def seed_permissions_and_roles():
         roles_by_name[role_name] = role
 
     # 3. Backfill User role_id & ensure core user accounts exist
-    admin_pass = os.environ.get('ADMIN_INITIAL_PASSWORD') or 'Admin#2025!'
-    manager_pass = os.environ.get('MANAGER_INITIAL_PASSWORD') or 'Manager#2025!'
-    doc_pass = os.environ.get('DOCTOR_INITIAL_PASSWORD') or 'Doctor#2025!'
-    rec_pass = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or 'Reception#2025!'
-    demo_pass = os.environ.get('DEMO_PASSWORD') or 'DemoViewer#2025!'
+    core_users_specs = [
+        ('admin', 'admin@hospital.org', 'admin', 'Chief Administrator', 'ADMIN_INITIAL_PASSWORD'),
+        ('manager', 'manager@hospital.org', 'manager', 'Operations Director', 'MANAGER_INITIAL_PASSWORD'),
+        ('dr_sarah', 's.mitchell@hospital.org', 'doctor', 'Dr. Sarah Mitchell', 'DOCTOR_INITIAL_PASSWORD'),
+        ('receptionist', 'frontdesk@hospital.org', 'receptionist', 'Front Desk Reception', 'RECEPTIONIST_INITIAL_PASSWORD'),
+        ('demo_viewer', 'demo@hospital.org', 'demo_viewer', 'Public Demo Guest (Read-Only)', 'DEMO_PASSWORD')
+    ]
 
-    core_defaults = {
-        'admin': {'email': 'admin@hospital.org', 'role': 'admin', 'name': 'Chief Administrator', 'pass': admin_pass},
-        'manager': {'email': 'manager@hospital.org', 'role': 'manager', 'name': 'Operations Director', 'pass': manager_pass},
-        'dr_sarah': {'email': 's.mitchell@hospital.org', 'role': 'doctor', 'name': 'Dr. Sarah Mitchell', 'pass': doc_pass},
-        'receptionist': {'email': 'frontdesk@hospital.org', 'role': 'receptionist', 'name': 'Front Desk Reception', 'pass': rec_pass},
-        'demo_viewer': {'email': 'demo@hospital.org', 'role': 'demo_viewer', 'name': 'Public Demo Guest (Read-Only)', 'pass': demo_pass}
-    }
+    generated_credentials = []
 
-    for username, udata in core_defaults.items():
+    for username, email, role_name, full_name, env_var in core_users_specs:
         user = User.query.filter_by(username=username).first()
-        r_obj = roles_by_name.get(udata['role'])
+        r_obj = roles_by_name.get(role_name)
+
         if not user:
+            initial_pwd = os.environ.get(env_var)
+            was_random = False
+            if not initial_pwd:
+                initial_pwd = generate_secure_temporary_password(16)
+                was_random = True
+                generated_credentials.append((username, role_name, initial_pwd))
+
             user = User(
                 username=username,
-                email=udata['email'],
-                role=udata['role'],
+                email=email,
+                role=role_name,
                 role_id=r_obj.id if r_obj else None,
-                full_name=udata['name'],
+                full_name=full_name,
                 is_active=True,
+                must_change_password=was_random,
                 failed_login_attempts=0,
                 locked_until=None
             )
-            user.set_password(udata['pass'])
+            user.set_password(initial_pwd)
             db.session.add(user)
         else:
             if not user.role_id and r_obj:
                 user.role_id = r_obj.id
             user.is_active = True
-            user.must_change_password = False
-            # Unlock account if previously locked out
-            user.failed_login_attempts = 0
-            user.locked_until = None
-            # If default user password doesn't match configured password, synchronize it
-            if not user.check_password(udata['pass']):
-                user.set_password(udata['pass'])
+            # Never overwrite existing user passwords on re-seeding
+
+        if username == 'dr_sarah' and not user.doctor_id:
+            sarah_doc = Doctor.query.filter(Doctor.name.ilike('%Sarah%')).first()
+            if sarah_doc:
+                user.doctor_id = sarah_doc.id
+
+    if generated_credentials:
+        print("\n" + "=" * 70)
+        print("  MediOptim Pro - Generated Initial Staff Credentials")
+        print("  (Random passwords generated because initial env vars were unset)")
+        print("  IMPORTANT: These credentials are displayed ONLY ONCE.")
+        print("=" * 70)
+        print(f"  {'Username':<15} | {'Role':<15} | {'Temporary Password':<25}")
+        print("-" * 70)
+        for uname, rname, pwd in generated_credentials:
+            print(f"  {uname:<15} | {rname:<15} | {pwd:<25}")
+        print("=" * 70 + "\n")
 
     for user in User.query.all():
         if not user.role_id or not user.assigned_role:
@@ -273,7 +293,7 @@ def seed_base_data(roles_by_name):
         db.session.add(bed)
 
     # ── 7. Patients with Clinical Vitals & Triage ─────────────────────────────
-    today = date.today().isoformat()
+    today = today_in_app_tz()
     patients_data = [
         {"name": "Alice Johnson",    "age": 45, "gender": "Female", "priority": "critical", "spec": "Cardiology",      "condition": "Severe acute chest pain radiating to left arm, ST elevation suspected", "triage": 1, "bp": "165/105", "hr": 112, "spo2": 93, "temp": 37.1},
         {"name": "Bob Martinez",     "age": 62, "gender": "Male",   "priority": "urgent",   "spec": "Neurology",       "condition": "Acute recurring migraine with hemiparesis and visual blur",              "triage": 2, "bp": "145/92",  "hr": 88,  "spo2": 97, "temp": 36.9},
@@ -311,7 +331,7 @@ def seed_base_data(roles_by_name):
             heart_rate=p["hr"],
             spo2=p["spo2"],
             temperature=p["temp"],
-            registered_at=datetime.utcnow()
+            registered_at=utc_now()
         )
         patient.no_show_risk = predict_no_show_risk(patient)
         db.session.add(patient)
@@ -331,18 +351,7 @@ def seed_appointments_and_runs():
     print("[SEED] Seeding realistic hospital appointments and telemetry...")
     
     # Resolve current date in configured timezone
-    try:
-        from config import Config
-        tz_name = getattr(Config, 'APP_TIMEZONE', 'Africa/Cairo')
-    except Exception:
-        tz_name = 'Africa/Cairo'
-    try:
-        import pytz
-        tz = pytz.timezone(tz_name)
-        now_dt = datetime.now(tz)
-    except Exception:
-        now_dt = datetime.now()
-
+    now_dt = now_in_app_tz()
     today_str = now_dt.strftime('%Y-%m-%d')
     yesterday_str = (now_dt - timedelta(days=1)).strftime('%Y-%m-%d')
     tomorrow_str = (now_dt + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -379,7 +388,7 @@ def seed_appointments_and_runs():
             "[GREEDY] Finished. Assigned: 10, Unassigned: 0\n"
             "[HYBRID] Final Result: Assigned=20, Unassigned=0, Room Conflicts=0"
         ),
-        created_at=datetime.utcnow()
+        created_at=utc_now()
     )
     db.session.add(opt_run)
     db.session.flush()
@@ -439,7 +448,7 @@ def seed_appointments_and_runs():
                 clinical_notes=clin_notes,
                 prescription=rx,
                 optimization_run_id=opt_run.id,
-                created_at=datetime.utcnow()
+                created_at=utc_now()
             )
             db.session.add(appt)
 
@@ -472,7 +481,7 @@ def seed_appointments_and_runs():
                 clinical_notes=clin_notes,
                 prescription=rx,
                 optimization_run_id=opt_run.id,
-                created_at=datetime.utcnow() - timedelta(days=1)
+                created_at=utc_now() - timedelta(days=1)
             )
             db.session.add(appt)
 
@@ -504,7 +513,7 @@ def seed_appointments_and_runs():
                 clinical_notes=clin_notes,
                 prescription=rx,
                 optimization_run_id=None,
-                created_at=datetime.utcnow()
+                created_at=utc_now()
             )
             db.session.add(appt)
 
@@ -524,3 +533,10 @@ def seed_database():
     # Seed appointments and initial runs if appointments table is empty
     if Appointment.query.count() == 0:
         seed_appointments_and_runs()
+
+    # Normalize existing doctor names to eliminate duplicate 'Dr.' prefixes
+    for doc in Doctor.query.all():
+        normalized = format_doctor_name(doc.name, with_title=True)
+        if doc.name != normalized:
+            doc.name = normalized
+    db.session.commit()

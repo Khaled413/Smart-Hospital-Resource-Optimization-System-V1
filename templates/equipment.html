@@ -192,7 +192,9 @@ function renderEquipment() {
             <button class="btn btn-outline btn-sm w-full" onclick="changeStatus(${e.id}, 'in_use')">Deploy / In Use</button>
           ` : ''}
           ${e.status !== 'maintenance' ? `
-            <button class="btn btn-danger btn-sm" onclick="changeStatus(${e.id}, 'maintenance')" title="Send to maintenance">🔧</button>
+            <button class="btn btn-danger btn-sm" onclick="changeStatus(${e.id}, 'maintenance')" title="Send device to maintenance" style="display:inline-flex;align-items:center;gap:4px">
+              🔧 <span style="font-size:11px">Maintenance</span>
+            </button>
           ` : ''}
         </div>
       </div>
@@ -201,6 +203,11 @@ function renderEquipment() {
 }
 
 async function changeStatus(id, status) {
+  if (status === 'maintenance') {
+    if (!confirm('Are you sure you want to take this equipment offline for maintenance?')) {
+      return;
+    }
+  }
   try {
     await API.patch(`/api/equipment/${id}/status`, { status });
     ToastManager.show(`Status updated to ${status}`, 'success');

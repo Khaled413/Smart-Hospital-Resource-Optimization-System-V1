@@ -127,6 +127,14 @@
 
 {% block extra_scripts %}
 <script>
+// Priority Color Scheme fallback to guarantee chart rendering
+const PRIORITY_COLORS = window.PRIORITY_COLORS || {
+  critical: '#ef4444',
+  urgent: '#f59e0b',
+  normal: '#10b981',
+  low: '#64748b'
+};
+
 let pChart = null, dChart = null, docChart = null;
 
 async function loadDashboard() {
@@ -144,80 +152,107 @@ async function loadDashboard() {
 
     renderCharts(data);
   } catch(e) {
+    console.error('loadDashboard error:', e);
     ToastManager.show('Failed to load dashboard data', 'error');
   }
 }
 
 function renderCharts(data) {
-  // Priority Chart
-  const pLabels = Object.keys(data.priority_distribution);
-  const pValues = Object.values(data.priority_distribution);
-  const pColors = pLabels.map(l => PRIORITY_COLORS[l] || '#64748b');
+  // Chart.js load order guard: wait if script is still initializing
+  if (typeof Chart === 'undefined') {
+    console.warn('Chart.js not yet loaded. Retrying in 100ms...');
+    setTimeout(() => renderCharts(data), 100);
+    return;
+  }
 
-  if (pChart) pChart.destroy();
-  pChart = new Chart(document.getElementById('priorityChart'), {
-    type: 'doughnut',
-    data: {
-      labels: pLabels.map(l => l.toUpperCase()),
-      datasets: [{ data: pValues, backgroundColor: pColors, borderWidth: 0 }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 10 } } }
-    }
-  });
+  // 1. Priority Chart
+  const pLabels = Object.keys(data.priority_distribution || {});
+  const pValues = Object.values(data.priority_distribution || {});
+  const pColors = pLabels.map(l => (PRIORITY_COLORS[l.toLowerCase()] || '#64748b'));
 
-  // Department Workload Chart
-  const dLabels = Object.keys(data.department_workload);
-  const dValues = Object.values(data.department_workload);
+  const pCanvas = document.getElementById('priorityChart');
+  if (pCanvas) {
+    const existing = Chart.getChart(pCanvas);
+    if (existing) existing.destroy();
+    if (pChart) { pChart.destroy(); pChart = null; }
 
-  if (dChart) dChart.destroy();
-  dChart = new Chart(document.getElementById('deptChart'), {
-    type: 'bar',
-    data: {
-      labels: dLabels,
-      datasets: [{
-        label: 'Appointments',
-        data: dValues,
-        backgroundColor: '#1a56db',
-        borderRadius: 4
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
-        y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(15, 23, 42, 0.06)' }, beginAtZero: true }
+    pChart = new Chart(pCanvas, {
+      type: 'doughnut',
+      data: {
+        labels: pLabels.map(l => l.toUpperCase()),
+        datasets: [{ data: pValues.length ? pValues : [1], backgroundColor: pColors.length ? pColors : ['#e2e8f0'], borderWidth: 0 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 10 } } }
       }
-    }
-  });
+    });
+  }
 
-  // Doctor Utilization Chart
-  const docLabels = data.doctor_utilization.map(d => d.name.replace('Dr. ', ''));
-  const docValues = data.doctor_utilization.map(d => d.utilization);
+  // 2. Department Workload Chart
+  const dLabels = Object.keys(data.department_workload || {});
+  const dValues = Object.values(data.department_workload || {});
 
-  if (docChart) docChart.destroy();
-  docChart = new Chart(document.getElementById('doctorChart'), {
-    type: 'bar',
-    data: {
-      labels: docLabels,
-      datasets: [{
-        label: 'Utilization %',
-        data: docValues,
-        backgroundColor: docValues.map(v => v >= 90 ? '#ef4444' : (v >= 60 ? '#10b981' : '#06b6d4')),
-        borderRadius: 4
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
-        y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(15, 23, 42, 0.06)' }, beginAtZero: true, max: 100 }
+  const dCanvas = document.getElementById('deptChart');
+  if (dCanvas) {
+    const existing = Chart.getChart(dCanvas);
+    if (existing) existing.destroy();
+    if (dChart) { dChart.destroy(); dChart = null; }
+
+    dChart = new Chart(dCanvas, {
+      type: 'bar',
+      data: {
+        labels: dLabels,
+        datasets: [{
+          label: 'Appointments',
+          data: dValues,
+          backgroundColor: '#1a56db',
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
+          y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(15, 23, 42, 0.06)' }, beginAtZero: true }
+        }
       }
-    }
-  });
+    });
+  }
+
+  // 3. Doctor Utilization Chart
+  const docList = data.doctor_utilization || [];
+  const docLabels = docList.map(d => formatDoctorName(d.name || d.doctor, false));
+  const docValues = docList.map(d => d.utilization || 0);
+
+  const docCanvas = document.getElementById('doctorChart');
+  if (docCanvas) {
+    const existing = Chart.getChart(docCanvas);
+    if (existing) existing.destroy();
+    if (docChart) { docChart.destroy(); docChart = null; }
+
+    docChart = new Chart(docCanvas, {
+      type: 'bar',
+      data: {
+        labels: docLabels,
+        datasets: [{
+          label: 'Utilization %',
+          data: docValues,
+          backgroundColor: docValues.map(v => v >= 90 ? '#ef4444' : (v >= 60 ? '#10b981' : '#06b6d4')),
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
+          y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(15, 23, 42, 0.06)' }, beginAtZero: true, max: 100 }
+        }
+      }
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', loadDashboard);

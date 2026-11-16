@@ -3,21 +3,10 @@
 {% block page_title %}Appointments & Schedule Timeline{% endblock %}
 {% block page_subtitle %}Interactive consultation calendar, room assignments, and doctor daily timelines{% endblock %}
 
-{% block header_actions %}
-<div style="display:flex;gap:8px">
-  <button class="btn btn-outline" onclick="exportCSV()">
-    📥 <span data-i18n="export_csv">Export CSV</span>
-  </button>
-  <button class="btn btn-primary" onclick="toggleViewMode()" id="view-mode-btn">
-    📊 <span id="view-mode-label">Switch to Timeline View</span>
-  </button>
-</div>
-{% endblock %}
-
 {% block content %}
 <!-- Toolbar -->
-<div class="toolbar">
-  <div class="toolbar-left">
+<div class="toolbar" style="flex-wrap:wrap;gap:12px">
+  <div class="toolbar-left" style="flex-wrap:wrap;gap:10px">
     <div class="search-bar" style="min-width:240px">
       <span class="search-icon">🔍</span>
       <input type="text" id="search-input" placeholder="Search patient, doctor, room..." oninput="filterAppts()">
@@ -36,8 +25,14 @@
     </select>
     <input type="date" class="form-control" id="date-filter" onchange="filterAppts()" style="width:auto;padding:8px 14px">
   </div>
-  <div class="toolbar-right">
-    <span class="text-muted" id="appt-count" style="font-size:13px"></span>
+  <div class="toolbar-right" style="display:flex;align-items:center;gap:10px;margin-left:auto">
+    <button class="btn btn-outline btn-sm" onclick="exportCSV()">
+      📥 <span data-i18n="export_csv">Export CSV</span>
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="toggleViewMode()" id="view-mode-btn">
+      📊 <span id="view-mode-label">Timeline View</span>
+    </button>
+    <span class="text-muted" id="appt-count" style="font-size:13px;white-space:nowrap"></span>
   </div>
 </div>
 

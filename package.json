@@ -1,0 +1,17 @@
+{
+  "name": "medioptim-pro",
+  "version": "2.0.0",
+  "description": "Smart Hospital Resource Optimization System",
+  "scripts": {
+    "pgls": "node --env-file-if-exists=.env ./node_modules/@postgres-language-server/cli/bin/postgres-language-server",
+    "pgls:check": "node --env-file-if-exists=.env ./node_modules/@postgres-language-server/cli/bin/postgres-language-server check",
+    "pgls:format": "node --env-file-if-exists=.env ./node_modules/@postgres-language-server/cli/bin/postgres-language-server format",
+    "pgls:dblint": "node --env-file-if-exists=.env ./node_modules/@postgres-language-server/cli/bin/postgres-language-server dblint",
+    "pgls:start": "node --env-file-if-exists=.env ./node_modules/@postgres-language-server/cli/bin/postgres-language-server start",
+    "pgls:stop": "node --env-file-if-exists=.env ./node_modules/@postgres-language-server/cli/bin/postgres-language-server stop"
+  },
+  "devDependencies": {
+    "@postgres-language-server/cli": "^0.28.2",
+    "@postgres-language-server/cli-x86_64-windows-msvc": "^0.28.2"
+  }
+}

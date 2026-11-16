@@ -1,0 +1,40 @@
+{
+  "$schema": "https://pg-language-server.com/latest/schema.json",
+  // Database configuration for Supabase PostgreSQL
+  "db": {
+    "host": "aws-0-eu-west-2.pooler.supabase.com",
+    "port": 5432,
+    "database": "postgres",
+    "username": "postgres.vnoonkhiqnggtbtaqhqz",
+    "connTimeoutSecs": 15,
+    "disableConnection": false,
+    // Database password is read securely via the PGPASSWORD environment variable.
+    // Do NOT hardcode credentials in this file.
+    //
+    // Safety guard: Statement execution is strictly disabled against remote production databases.
+    // Only local targets would be permitted if specified (e.g. 127.0.0.1/*).
+    "allowStatementExecutionsAgainst": []
+  },
+  // Static analysis, linting, and best-practice checks
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  // SQL semantic type-checking and schema resolution
+  "typecheck": {
+    "enabled": true,
+    "searchPath": [
+      "public"
+    ]
+  },
+  // SQL formatting style configuration
+  "format": {
+    "lineWidth": 100,
+    "indentSize": 2,
+    "indentStyle": "spaces",
+    "keywordCase": "upper",
+    "constantCase": "upper"
+  }
+}

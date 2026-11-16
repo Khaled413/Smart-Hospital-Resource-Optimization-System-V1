@@ -31,10 +31,13 @@ venv/
 env/
 ENV/
 
-# Environment files
+# Environment files & credentials
 .env
-.env.local
-.env.*.local
+.env.*
+*.env
+.pgpass
+postgres-language-server.private.jsonc
+*.local.jsonc
 
 # Database files & instance storage
 instance/
@@ -49,13 +52,19 @@ htmlcov/
 .hypothesis/
 
 # IDE & OS files
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
+
+# Node & CLI dependencies
+node_modules/
+supabase/.temp/
 
 # Vercel
 .vercel/

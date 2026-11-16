@@ -25,6 +25,31 @@ from optimizer import (
 )
 
 
+@pytest.fixture(autouse=True)
+def setup_test_db():
+    with app.app_context():
+        db.create_all()
+        from seed_data import seed_database
+        seed_database()
+        # Reset test state isolation
+        UserPermissionOverride.query.delete()
+        passwords = {
+            'admin': 'Admin#2025!',
+            'manager': 'Manager#2025!',
+            'dr_sarah': 'Doctor#2025!',
+            'receptionist': 'Reception#2025!',
+            'demo_viewer': 'DemoViewer#2025!'
+        }
+        for u in User.query.all():
+            u.failed_login_attempts = 0
+            u.locked_until = None
+            u.must_change_password = False
+            if u.username in passwords:
+                u.set_password(passwords[u.username])
+        db.session.commit()
+        yield
+
+
 @pytest.fixture
 def client():
     app.config['TESTING'] = True
@@ -51,9 +76,9 @@ def test_user_authentication(client):
     res_case = client.post('/api/auth/login', json={'username': 'ADMIN', 'password': 'Admin#2025!'})
     assert res_case.status_code == 200
 
-    # Legacy credentials compatibility fallback
+    # Legacy unconfigured passwords are rejected without hardcoded backdoors
     res_legacy = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
-    assert res_legacy.status_code == 200
+    assert res_legacy.status_code == 401
 
     # Failed login with wrong password
     res_fail = client.post('/api/auth/login', json={'username': 'admin', 'password': 'wrongpassword'})
@@ -139,7 +164,8 @@ def test_rbac_and_protected_routes(client):
     assert res_api.status_code == 401
 
     # 3. Login as receptionist
-    login_as(client, 'receptionist', 'Reception#2025!')
+    res_log = login_as(client, 'receptionist', 'Reception#2025!')
+    assert res_log.status_code == 200
 
     # Receptionist can view beds
     res_beds = client.get('/api/beds')

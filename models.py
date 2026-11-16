@@ -4,10 +4,129 @@ Includes Users, RBAC, Beds, Equipment, Triage Vitals, and Audit Logs.
 """
 
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from sqlalchemy.orm import validates
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import os
+import secrets
+import re
 from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
+
+
+def utc_now():
+    """Return timezone-aware current UTC datetime for database columns."""
+    return datetime.now(timezone.utc)
+
+
+def get_app_timezone_name() -> str:
+    """Return configured application timezone name (defaults to Africa/Cairo)."""
+    return os.environ.get('APP_TIMEZONE', 'Africa/Cairo')
+
+
+def now_in_app_tz(tz_name: str | None = None) -> datetime:
+    """Return timezone-aware current datetime in APP_TIMEZONE (Africa/Cairo)."""
+    try:
+        tz = ZoneInfo(tz_name or get_app_timezone_name())
+    except Exception:
+        tz = ZoneInfo('Africa/Cairo')
+    return datetime.now(tz)
+
+
+def today_in_app_tz(tz_name: str | None = None) -> str:
+    """
+    Return today's date string (YYYY-MM-DD) in APP_TIMEZONE (Africa/Cairo).
+    DB timestamps remain UTC timestamptz.
+    """
+    return now_in_app_tz(tz_name).strftime('%Y-%m-%d')
+
+
+COMMON_INSECURE_PASSWORDS = {
+    'password', 'password123', 'admin', 'admin123', 'hospital',
+    'hospital123', 'doctor', 'doctor123', 'nurse', 'reception',
+    'manager', 'medicare', '123456789012', 'qwertyuiopas', 'welcome12345'
+}
+
+
+def validate_password_complexity(password: str, user=None) -> tuple[bool, str | None]:
+    """
+    Validate password complexity:
+    - Minimum length: 12 characters.
+    - Requires at least one uppercase letter, one lowercase letter, one digit, and one special symbol.
+    - Rejects common patterns, predictable repetitions, sequences, and personal identifier leaks.
+    """
+    if not password or len(password) < 12:
+        return False, "Password must be at least 12 characters long."
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter (A-Z)."
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter (a-z)."
+    if not re.search(r'\d', password):
+        return False, "Password must contain at least one digit (0-9)."
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{}|;:,.<>?~`]', password):
+        return False, "Password must contain at least one special character (e.g. !@#$%^&*)."
+    if re.search(r'(.)\1{3,}', password):
+        return False, "Password contains too many repeated consecutive characters."
+
+    lower_pwd = password.lower()
+    common_sequences = ['123456', '654321', '234567', '765432', 'abcdef', 'qwerty', 'asdfgh', 'zxcvbn']
+    for seq in common_sequences:
+        if seq in lower_pwd:
+            return False, f"Password cannot contain simple keyboard sequences like '{seq}'."
+
+    for word in COMMON_INSECURE_PASSWORDS:
+        if word in lower_pwd:
+            return False, "Password contains common or predictable words."
+
+    if user:
+        uname = (getattr(user, 'username', '') or '').lower()
+        if len(uname) >= 3 and uname in lower_pwd:
+            return False, "Password cannot contain your username."
+        email = (getattr(user, 'email', '') or '').lower()
+        email_prefix = email.split('@')[0] if '@' in email else ''
+        if len(email_prefix) >= 3 and email_prefix in lower_pwd:
+            return False, "Password cannot contain your email identifier."
+
+    return True, None
+
+
+def generate_secure_temporary_password(length=14) -> str:
+    """Generate a cryptographically secure temporary password exceeding minimum complexity requirements."""
+    chars_upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    chars_lower = "abcdefghijkmnopqrstuvwxyz"
+    chars_digits = "23456789"
+    chars_symbols = "!@#$%^&*()_+-="
+    all_chars = chars_upper + chars_lower + chars_digits + chars_symbols
+
+    pwd = [
+        secrets.choice(chars_upper), secrets.choice(chars_upper),
+        secrets.choice(chars_lower), secrets.choice(chars_lower),
+        secrets.choice(chars_digits), secrets.choice(chars_digits),
+        secrets.choice(chars_symbols), secrets.choice(chars_symbols),
+    ]
+    pwd += [secrets.choice(all_chars) for _ in range(max(0, length - len(pwd)))]
+    secrets.SystemRandom().shuffle(pwd)
+    return ''.join(pwd)
+
+
+def format_doctor_name(name: str | None, with_title: bool = True) -> str:
+    """
+    Normalizes a doctor's name, stripping duplicate or unwanted 'Dr.' prefixes.
+    When with_title=True, returns 'Dr. <Name>' (e.g., 'Dr. Sarah Mitchell').
+    When with_title=False, returns bare '<Name>' (e.g., 'Sarah Mitchell').
+    Guarantees it will never produce 'Dr. Dr. <Name>'.
+    """
+    if not name:
+        return ""
+    cleaned = str(name).strip()
+    while re.match(r'^(?:dr\.|dr\b)\s*', cleaned, flags=re.IGNORECASE):
+        cleaned = re.sub(r'^(?:dr\.|dr\b)\s*', '', cleaned, count=1, flags=re.IGNORECASE).strip()
+    if cleaned.lower() in ('dr', 'dr.'):
+        cleaned = ""
+    if not cleaned:
+        return ""
+    return f"Dr. {cleaned}" if with_title else cleaned
 
 
 # ─── Dynamic RBAC Models ───────────────────────────────────────────────────────
@@ -31,7 +150,7 @@ class Permission(db.Model):
     label_ar = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text, default='')
     is_sensitive = db.Column(db.Boolean, default=False, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     def to_dict(self):
         return {
@@ -55,8 +174,8 @@ class Role(db.Model):
     is_system = db.Column(db.Boolean, default=False, nullable=False)  # System roles cannot be deleted
     is_locked = db.Column(db.Boolean, default=False, nullable=False)  # Admin role is locked: permissions immutable
     version = db.Column(db.Integer, default=1, nullable=False)        # Incremented on permission edit for cache busting
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     # Relationships
     permissions = db.relationship('Permission', secondary=role_permissions, backref=db.backref('roles', lazy='dynamic'), lazy='joined')
@@ -93,7 +212,7 @@ class UserPermissionOverride(db.Model):
     effect = db.Column(db.String(10), nullable=False)  # 'grant' or 'deny'
     reason = db.Column(db.String(255), nullable=False)
     created_by = db.Column(db.String(80), default='admin')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationship
     permission = db.relationship('Permission', lazy='joined')
@@ -128,9 +247,9 @@ class User(db.Model):
     must_change_password = db.Column(db.Boolean, default=False, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     failed_login_attempts = db.Column(db.Integer, default=0, nullable=False)
-    locked_until = db.Column(db.DateTime, nullable=True)
+    locked_until = db.Column(db.DateTime(timezone=True), nullable=True)
     permissions_version = db.Column(db.Integer, default=1, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     doctor = db.relationship('Doctor', backref=db.backref('user_account', uselist=False))
     permission_overrides = db.relationship('UserPermissionOverride', backref='user', cascade='all, delete-orphan', lazy='joined')
@@ -202,7 +321,7 @@ class Department(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     capacity = db.Column(db.Integer, default=50)
     description = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     doctors = db.relationship('Doctor', backref='dept', lazy=True)
@@ -236,14 +355,31 @@ class Doctor(db.Model):
     max_patients_per_day = db.Column(db.Integer, default=10)
     available_from = db.Column(db.String(10), default='08:00')  # HH:MM
     available_until = db.Column(db.String(10), default='17:00')  # HH:MM
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     appointments = db.relationship('Appointment', backref='doctor', lazy=True)
 
+    @validates('name')
+    def validate_name(self, key, value):
+        return format_doctor_name(value, with_title=True)
+
+    @property
+    def clean_name(self):
+        return format_doctor_name(self.name, with_title=False)
+
+    @property
+    def formatted_name(self):
+        return format_doctor_name(self.name, with_title=True)
+
+    @property
+    def department(self):
+        """Compatibility property alias for department relationship (backref 'dept')."""
+        return self.dept
+
     def to_dict(self, appointments_today=None):
         if appointments_today is None:
-            today_iso = datetime.utcnow().date().isoformat()
+            today_iso = today_in_app_tz()
             appointments_today = Appointment.query.filter(
                 Appointment.doctor_id == self.id,
                 Appointment.date == today_iso,
@@ -251,7 +387,8 @@ class Doctor(db.Model):
             ).count()
         return {
             'id': self.id,
-            'name': self.name,
+            'name': format_doctor_name(self.name, with_title=True),
+            'clean_name': format_doctor_name(self.name, with_title=False),
             'specialization': self.specialization,
             'department_id': self.department_id,
             'department_name': self.dept.name if self.dept else 'Unknown',
@@ -275,7 +412,7 @@ class Room(db.Model):
     room_type = db.Column(db.String(50), default='consultation')  # consultation, surgery, icu, ward
     capacity = db.Column(db.Integer, default=1)
     status = db.Column(db.String(20), default='available')  # available, occupied, maintenance
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     appointments = db.relationship('Appointment', backref='room', lazy=True)
@@ -310,7 +447,7 @@ class Bed(db.Model):
     admission_date = db.Column(db.String(20), default='')
     expected_discharge = db.Column(db.String(20), default='')
     notes = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     patient = db.relationship('Patient', backref=db.backref('admitted_bed', uselist=False))
 
@@ -344,7 +481,7 @@ class Equipment(db.Model):
     room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'), nullable=True)
     status = db.Column(db.String(30), default='available')  # available, in_use, maintenance
     notes = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     def to_dict(self):
         return {
@@ -386,6 +523,7 @@ class Patient(db.Model):
     priority = db.Column(db.String(20), default='normal')  # critical, urgent, normal, low
     required_specialization = db.Column(db.String(100), nullable=False)
     condition_description = db.Column(db.Text, default='')
+    # TODO: Convert preferred_date string to Date native type in a future schema migration.
     preferred_date = db.Column(db.String(20), default='')
     
     # Clinical Triage & Vitals
@@ -398,8 +536,12 @@ class Patient(db.Model):
     # ML Prediction
     no_show_risk = db.Column(db.Float, default=0.1)  # 0.0 to 1.0 probability
     
-    registered_at = db.Column(db.DateTime, default=datetime.utcnow)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    registered_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        db.Index('idx_patients_priority_preferred_date', 'priority', 'preferred_date'),
+    )
 
     # Relationships
     appointments = db.relationship('Appointment', backref='patient', lazy=True)
@@ -465,6 +607,7 @@ class Appointment(db.Model):
     patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False)
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctors.id'), nullable=False)
     room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'), nullable=False)
+    # TODO: Convert date, start_time, end_time strings to Date and Time native types in a future schema migration.
     date = db.Column(db.String(20), nullable=False)
     start_time = db.Column(db.String(10), nullable=False)
     end_time = db.Column(db.String(10), nullable=False)
@@ -478,7 +621,11 @@ class Appointment(db.Model):
     clinical_notes = db.Column(db.Text, default='')
     prescription = db.Column(db.Text, default='')
     optimization_run_id = db.Column(db.Integer, db.ForeignKey('optimization_runs.id'), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        db.Index('idx_appointments_lookup', 'date', 'doctor_id', 'room_id', 'status'),
+    )
 
     equipment = db.relationship('Equipment', backref='appointments', lazy=True)
 
@@ -507,7 +654,7 @@ class Appointment(db.Model):
             'patient_priority': self.patient.priority if self.patient else 'normal',
             'patient_triage': (self.patient.triage_level if self.patient else 3) if can_view_clinical else None,
             'doctor_id': self.doctor_id,
-            'doctor_name': self.doctor.name if self.doctor else 'Unknown',
+            'doctor_name': format_doctor_name(self.doctor.name, with_title=True) if self.doctor else 'Unknown',
             'doctor_specialization': self.doctor.specialization if self.doctor else '',
             'room_id': self.room_id,
             'room_number': self.room.room_number if self.room else 'Unknown',
@@ -545,7 +692,7 @@ class OptimizationRun(db.Model):
     utilization_rate = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='success')  # success, failed, partial
     solver_log = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     appointments = db.relationship('Appointment', backref='optimization_run', lazy=True)
@@ -581,7 +728,11 @@ class AuditLog(db.Model):
     resource_type = db.Column(db.String(50), nullable=False)  # patient, doctor, appointment, bed, etc.
     resource_id = db.Column(db.Integer, nullable=True)
     details = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        db.Index('idx_audit_logs_created_at', 'created_at'),
+    )
 
     def to_dict(self):
         return {

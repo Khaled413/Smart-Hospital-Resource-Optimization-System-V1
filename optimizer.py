@@ -21,17 +21,19 @@ from datetime import datetime, timedelta
 import random
 import math
 from collections import defaultdict
+from models import format_doctor_name
 
 
 class OptimizerResult(tuple):
     """3-tuple subclass for backward-compatible unpacking with algorithm metadata."""
-    def __new__(cls, assignments, unassigned, log, algorithm_used="greedy", fallback_reason=None):
+    def __new__(cls, assignments, unassigned, log, algorithm_used="greedy", fallback_reason=None, unassigned_details=None):
         instance = super().__new__(cls, (assignments, unassigned, log))
         instance.assignments = assignments
         instance.unassigned = unassigned
         instance.log = log
         instance.algorithm_used = algorithm_used
         instance.fallback_reason = fallback_reason
+        instance.unassigned_details = unassigned_details or []
         return instance
 
 
@@ -161,12 +163,13 @@ def sync_triage_and_priority(priority: str = None, triage_level: int = None):
 
 def calculate_waiting_time(patient, doctor, slot_start: int, target_date: str) -> int:
     """
-    Measure waiting time as slot_start - max(arrival_time, doctor_shift_start).
-    If patient.registered_at is on target_date, use registered_at time.
-    Otherwise, default to doctor's shift start.
+    Measure waiting time in minutes:
+    - start - max(arrival, shift_start) when arrival is known
+    - start - shift_start when arrival is unknown (never start - 0 = large meaningless minutes)
+    Guarantees non-negative integer.
     """
-    doc_start = time_to_minutes(doctor.available_from)
-    arrival_min = doc_start
+    shift_start = time_to_minutes(doctor.available_from) if (doctor and hasattr(doctor, 'available_from')) else 8 * 60
+    arrival_min = None
 
     reg_at = getattr(patient, 'registered_at', None)
     if reg_at:
@@ -178,10 +181,21 @@ def calculate_waiting_time(patient, doctor, slot_start: int, target_date: str) -
                 t_part = reg_at.split('T')[-1][:5]
                 arrival_min = time_to_minutes(t_part)
         except Exception:
-            arrival_min = doc_start
+            arrival_min = None
 
-    effective_start = max(arrival_min, doc_start)
-    return max(0, slot_start - effective_start)
+    if arrival_min is None and hasattr(patient, 'arrival_time') and patient.arrival_time:
+        try:
+            arrival_min = time_to_minutes(patient.arrival_time)
+        except Exception:
+            arrival_min = None
+
+    if arrival_min is not None:
+        effective_baseline = max(arrival_min, shift_start)
+    else:
+        # Arrival is unknown: wait is measured from doctor's shift start, never from 00:00 midnight
+        effective_baseline = shift_start
+
+    return max(0, slot_start - effective_baseline)
 
 
 # ─── Schedule State Tracker ───────────────────────────────────────────────────
@@ -275,6 +289,7 @@ def run_greedy(patients, doctors, rooms, target_date, schedule_state=None):
     log = ["[GREEDY] Starting Dynamic Greedy scheduling..."]
     assignments = []
     unassigned = []
+    unassigned_details = []
 
     if schedule_state is None:
         schedule_state = ScheduleState(doctors, rooms)
@@ -302,11 +317,29 @@ def run_greedy(patients, doctors, rooms, target_date, schedule_state=None):
         ]
 
         if not compatible_doctors:
+            reason = f"No doctor available with specialization matching '{patient.required_specialization}'"
             log.append(f"[GREEDY] ✗ No matching doctor for {patient.name} ({patient.required_specialization})")
             unassigned.append(patient)
+            unassigned_details.append({
+                'patient_id': patient.id,
+                'name': patient.name,
+                'priority': patient.priority,
+                'specialization': patient.required_specialization,
+                'reason': reason
+            })
             continue
 
         compatible_doctors.sort(key=lambda d: schedule_state.doctor_patient_count.get(d.id, 0))
+
+        # Determine specific reason if unable to schedule
+        all_capped = all(
+            schedule_state.doctor_patient_count.get(d.id, 0) >= d.max_patients_per_day
+            for d in compatible_doctors
+        )
+        if all_capped:
+            reason = "Doctor capacity full (maximum daily patient quota reached)"
+        else:
+            reason = "No available time slot or room within doctor shift hours"
 
         for doctor in compatible_doctors:
             if schedule_state.doctor_patient_count.get(doctor.id, 0) >= doctor.max_patients_per_day:
@@ -358,7 +391,7 @@ def run_greedy(patients, doctors, rooms, target_date, schedule_state=None):
                     })
                     log.append(
                         f"[GREEDY] ✓ {patient.name} ({patient.priority.upper()}, {duration}m) → "
-                        f"Dr. {doctor.name} | Room {selected_room.room_number} | "
+                        f"{format_doctor_name(doctor.name, with_title=True)} | Room {selected_room.room_number} | "
                         f"{minutes_to_time(current_slot)}-{minutes_to_time(slot_end)} | Wait={wait_time}m"
                     )
                     assigned = True
@@ -371,10 +404,17 @@ def run_greedy(patients, doctors, rooms, target_date, schedule_state=None):
 
         if not assigned:
             unassigned.append(patient)
-            log.append(f"[GREEDY] ✗ Could not schedule {patient.name} (Capacity full or time window exceeded)")
+            unassigned_details.append({
+                'patient_id': patient.id,
+                'name': patient.name,
+                'priority': patient.priority,
+                'specialization': patient.required_specialization,
+                'reason': reason
+            })
+            log.append(f"[GREEDY] ✗ Could not schedule {patient.name} ({reason})")
 
     log.append(f"[GREEDY] Finished. Assigned: {len(assignments)}, Unassigned: {len(unassigned)}")
-    return OptimizerResult(assignments, unassigned, log, algorithm_used="greedy")
+    return OptimizerResult(assignments, unassigned, log, algorithm_used="greedy", unassigned_details=unassigned_details)
 
 
 # ─── Linear Programming Algorithm ─────────────────────────────────────────────
@@ -519,13 +559,27 @@ def run_lp(patients, doctors, rooms, target_date, schedule_state=None):
             if not has_incumbent:
                 fallback_reason = f"Solver status {status_str} (code {status_code}) without incumbent"
                 log.append(f"[LP Fallback] {fallback_reason}. Switching to Greedy.")
-                g_assign, g_unassigned, g_log = run_greedy(unscheduled_patients, doctors, rooms, target_date, schedule_state=schedule_state)
-                return OptimizerResult(g_assign, g_unassigned, log + g_log, algorithm_used="greedy", fallback_reason=fallback_reason)
+                g_res = run_greedy(unscheduled_patients, doctors, rooms, target_date, schedule_state=schedule_state)
+                return OptimizerResult(
+                    g_res.assignments,
+                    g_res.unassigned,
+                    log + g_res.log,
+                    algorithm_used="greedy",
+                    fallback_reason=fallback_reason,
+                    unassigned_details=getattr(g_res, 'unassigned_details', [])
+                )
     except Exception as e:
         fallback_reason = f"CBC solver error: {e}"
         log.append(f"[LP Fallback] {fallback_reason}. Switching to Dynamic Heuristic.")
-        g_assign, g_unassigned, g_log = run_greedy(unscheduled_patients, doctors, rooms, target_date, schedule_state=schedule_state)
-        return OptimizerResult(g_assign, g_unassigned, log + g_log, algorithm_used="greedy", fallback_reason=fallback_reason)
+        g_res = run_greedy(unscheduled_patients, doctors, rooms, target_date, schedule_state=schedule_state)
+        return OptimizerResult(
+            g_res.assignments,
+            g_res.unassigned,
+            log + g_res.log,
+            algorithm_used="greedy",
+            fallback_reason=fallback_reason,
+            unassigned_details=getattr(g_res, 'unassigned_details', [])
+        )
 
     # Process LP solution
     assignments = []
@@ -564,13 +618,27 @@ def run_lp(patients, doctors, rooms, target_date, schedule_state=None):
             assigned_pids.add(pid)
             log.append(
                 f"[LP] ✓ {patient.name} ({patient.priority.upper()}) → "
-                f"Dr. {doctor.name} | Room {room.room_number} | "
+                f"{format_doctor_name(doctor.name, with_title=True)} | Room {room.room_number} | "
                 f"{minutes_to_time(start)}-{minutes_to_time(start + dur)} | wait={wait_time}m"
             )
 
     unassigned = [p for p in unscheduled_patients if p.id not in assigned_pids]
+    unassigned_details = []
+    for p in unassigned:
+        compat_docs = [d for d in doctors if are_specializations_compatible(d.specialization, p.required_specialization)]
+        if not compat_docs:
+            reason = f"No doctor available with specialization matching '{p.required_specialization}'"
+        else:
+            reason = "Resource capacity constrained (doctor shifts or rooms fully booked under solver optimization)"
+        unassigned_details.append({
+            'patient_id': p.id,
+            'name': p.name,
+            'priority': p.priority,
+            'specialization': p.required_specialization,
+            'reason': reason
+        })
     log.append(f"[LP] Completed. Assigned: {len(assignments)}, Unassigned: {len(unassigned)}")
-    return OptimizerResult(assignments, unassigned, log, algorithm_used="lp", fallback_reason=None)
+    return OptimizerResult(assignments, unassigned, log, algorithm_used="lp", fallback_reason=None, unassigned_details=unassigned_details)
 
 
 # ─── Hybrid Algorithm ─────────────────────────────────────────────────────────
@@ -610,18 +678,22 @@ def run_hybrid(patients, doctors, rooms, target_date, schedule_state=None):
     remaining_patients = low_priority + lp_unassigned
     greedy_assignments = []
     greedy_unassigned = []
+    all_unassigned_details = []
 
     if remaining_patients:
-        greedy_assignments, greedy_unassigned, greedy_log = run_greedy(
+        greedy_res = run_greedy(
             remaining_patients, doctors, rooms, target_date, schedule_state=schedule_state
         )
-        log.extend(greedy_log)
+        greedy_assignments = greedy_res.assignments
+        greedy_unassigned = greedy_res.unassigned
+        log.extend(greedy_res.log)
+        all_unassigned_details = getattr(greedy_res, 'unassigned_details', [])
 
     all_assignments = lp_assignments + greedy_assignments
     all_unassigned = greedy_unassigned
 
     log.append(f"[HYBRID] Final Result: Assigned={len(all_assignments)}, Unassigned={len(all_unassigned)}")
-    return OptimizerResult(all_assignments, all_unassigned, log, algorithm_used="hybrid")
+    return OptimizerResult(all_assignments, all_unassigned, log, algorithm_used="hybrid", unassigned_details=all_unassigned_details)
 
 
 # ─── Main Optimization Entry Point ───────────────────────────────────────────
@@ -636,6 +708,9 @@ def run_optimization(algorithm: str, patients, doctors, rooms, target_date: str,
         return {
             'assignments': [],
             'unassigned': [],
+            'unassigned_details': [],
+            'skipped_count': 0,
+            'skipped_reasons': {},
             'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0, 'avg_wait_time': 0, 'utilization_rate': 0},
             'log': ['No patients in queue to schedule.'],
             'algorithm_used': algorithm,
@@ -654,11 +729,31 @@ def run_optimization(algorithm: str, patients, doctors, rooms, target_date: str,
         if len(res) >= 5:
             fallback_reason = res[4]
     elif algorithm == 'hybrid':
-        assignments, unassigned, log = run_hybrid(patients, doctors, rooms, target_date, schedule_state=schedule_state)
+        res = run_hybrid(patients, doctors, rooms, target_date, schedule_state=schedule_state)
+        assignments, unassigned, log = res[0], res[1], res[2]
         actual_algo = 'hybrid'
     else:
-        assignments, unassigned, log = run_greedy(patients, doctors, rooms, target_date, schedule_state=schedule_state)
+        res = run_greedy(patients, doctors, rooms, target_date, schedule_state=schedule_state)
+        assignments, unassigned, log = res[0], res[1], res[2]
         actual_algo = 'greedy'
+
+    unassigned_details = getattr(res, 'unassigned_details', None)
+    if not unassigned_details:
+        unassigned_details = [
+            {
+                'patient_id': p.id,
+                'name': p.name,
+                'priority': p.priority,
+                'specialization': p.required_specialization,
+                'reason': "Capacity full or scheduling constraints"
+            }
+            for p in unassigned
+        ]
+
+    skipped_reasons = {}
+    for item in unassigned_details:
+        r = item.get('reason', 'Unassigned')
+        skipped_reasons[r] = skipped_reasons.get(r, 0) + 1
 
     total = len(patients)
     assigned = len(assignments)
@@ -690,6 +785,9 @@ def run_optimization(algorithm: str, patients, doctors, rooms, target_date: str,
     return {
         'assignments': assignments,
         'unassigned': unassigned,
+        'unassigned_details': unassigned_details,
+        'skipped_count': unassigned_count,
+        'skipped_reasons': skipped_reasons,
         'metrics': metrics,
         'log': log,
         'algorithm_used': actual_algo,
@@ -753,7 +851,7 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
             if state.is_doctor_free(doc.id, slot_candidate, slot_end):
                 for room in dept_rooms:
                     if state.is_room_free(room.id, slot_candidate, slot_end + buffer):
-                        log.append(f"[EMERGENCY] ✓ Found immediate opening with Dr. {doc.name} in Room {room.room_number}")
+                        log.append(f"[EMERGENCY] ✓ Found immediate opening with {format_doctor_name(doc.name, with_title=True)} in Room {room.room_number}")
                         return {
                             'action': 'immediate_slot',
                             'emergency_assignment': {
@@ -874,7 +972,8 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
 def run_scenario_simulation(patients, doctors, rooms, target_date,
                             absent_doctor_ids=None,
                             disabled_room_ids=None,
-                            patient_surge_percent=0):
+                            patient_surge_percent=0,
+                            existing_appointments=None):
     """
     Simulates operational crises:
     - Doctor absenteeism / sick leave
@@ -885,7 +984,7 @@ def run_scenario_simulation(patients, doctors, rooms, target_date,
     absent_doctor_ids = set(absent_doctor_ids or [])
     disabled_room_ids = set(disabled_room_ids or [])
 
-    baseline = run_optimization('hybrid', patients, doctors, rooms, target_date)
+    baseline = run_optimization('hybrid', patients, doctors, rooms, target_date, existing_appointments=existing_appointments)
 
     sim_doctors = [d for d in doctors if d.id not in absent_doctor_ids]
     sim_rooms = [r for r in rooms if r.id not in disabled_room_ids]
@@ -913,7 +1012,7 @@ def run_scenario_simulation(patients, doctors, rooms, target_date,
                     self.no_show_risk = 0.05
             sim_patients.append(MockPatient(proto, i))
 
-    simulated = run_optimization('hybrid', sim_patients, sim_doctors, sim_rooms, target_date)
+    simulated = run_optimization('hybrid', sim_patients, sim_doctors, sim_rooms, target_date, existing_appointments=existing_appointments)
 
     return {
         'baseline': {
