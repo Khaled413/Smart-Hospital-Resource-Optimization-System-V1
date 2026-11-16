@@ -5,7 +5,8 @@ Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Be
 
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment, User,
-    Appointment, OptimizationRun, Permission, Role, UserPermissionOverride, utc_now
+    Appointment, OptimizationRun, Permission, Role, UserPermissionOverride, utc_now,
+    generate_secure_temporary_password
 )
 from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
@@ -99,41 +100,63 @@ def seed_permissions_and_roles():
         roles_by_name[role_name] = role
 
     # 3. Backfill User role_id & ensure core user accounts exist
-    admin_pass = os.environ.get('ADMIN_INITIAL_PASSWORD') or 'Admin#2025!'
-    manager_pass = os.environ.get('MANAGER_INITIAL_PASSWORD') or 'Manager#2025!'
-    doc_pass = os.environ.get('DOCTOR_INITIAL_PASSWORD') or 'Doctor#2025!'
-    rec_pass = os.environ.get('RECEPTIONIST_INITIAL_PASSWORD') or 'Reception#2025!'
-    demo_pass = os.environ.get('DEMO_PASSWORD') or 'DemoViewer#2025!'
+    core_users_specs = [
+        ('admin', 'admin@hospital.org', 'admin', 'Chief Administrator', 'ADMIN_INITIAL_PASSWORD'),
+        ('manager', 'manager@hospital.org', 'manager', 'Operations Director', 'MANAGER_INITIAL_PASSWORD'),
+        ('dr_sarah', 's.mitchell@hospital.org', 'doctor', 'Dr. Sarah Mitchell', 'DOCTOR_INITIAL_PASSWORD'),
+        ('receptionist', 'frontdesk@hospital.org', 'receptionist', 'Front Desk Reception', 'RECEPTIONIST_INITIAL_PASSWORD'),
+        ('demo_viewer', 'demo@hospital.org', 'demo_viewer', 'Public Demo Guest (Read-Only)', 'DEMO_PASSWORD')
+    ]
 
-    core_defaults = {
-        'admin': {'email': 'admin@hospital.org', 'role': 'admin', 'name': 'Chief Administrator', 'pass': admin_pass},
-        'manager': {'email': 'manager@hospital.org', 'role': 'manager', 'name': 'Operations Director', 'pass': manager_pass},
-        'dr_sarah': {'email': 's.mitchell@hospital.org', 'role': 'doctor', 'name': 'Dr. Sarah Mitchell', 'pass': doc_pass},
-        'receptionist': {'email': 'frontdesk@hospital.org', 'role': 'receptionist', 'name': 'Front Desk Reception', 'pass': rec_pass},
-        'demo_viewer': {'email': 'demo@hospital.org', 'role': 'demo_viewer', 'name': 'Public Demo Guest (Read-Only)', 'pass': demo_pass}
-    }
+    generated_credentials = []
 
-    for username, udata in core_defaults.items():
+    for username, email, role_name, full_name, env_var in core_users_specs:
         user = User.query.filter_by(username=username).first()
-        r_obj = roles_by_name.get(udata['role'])
+        r_obj = roles_by_name.get(role_name)
+
         if not user:
+            initial_pwd = os.environ.get(env_var)
+            was_random = False
+            if not initial_pwd:
+                initial_pwd = generate_secure_temporary_password(16)
+                was_random = True
+                generated_credentials.append((username, role_name, initial_pwd))
+
             user = User(
                 username=username,
-                email=udata['email'],
-                role=udata['role'],
+                email=email,
+                role=role_name,
                 role_id=r_obj.id if r_obj else None,
-                full_name=udata['name'],
+                full_name=full_name,
                 is_active=True,
+                must_change_password=was_random,
                 failed_login_attempts=0,
                 locked_until=None
             )
-            user.set_password(udata['pass'])
+            user.set_password(initial_pwd)
             db.session.add(user)
         else:
             if not user.role_id and r_obj:
                 user.role_id = r_obj.id
             user.is_active = True
             # Never overwrite existing user passwords on re-seeding
+
+        if username == 'dr_sarah' and not user.doctor_id:
+            sarah_doc = Doctor.query.filter(Doctor.name.ilike('%Sarah%')).first()
+            if sarah_doc:
+                user.doctor_id = sarah_doc.id
+
+    if generated_credentials:
+        print("\n" + "=" * 70)
+        print("  MediOptim Pro - Generated Initial Staff Credentials")
+        print("  (Random passwords generated because initial env vars were unset)")
+        print("  IMPORTANT: These credentials are displayed ONLY ONCE.")
+        print("=" * 70)
+        print(f"  {'Username':<15} | {'Role':<15} | {'Temporary Password':<25}")
+        print("-" * 70)
+        for uname, rname, pwd in generated_credentials:
+            print(f"  {uname:<15} | {rname:<15} | {pwd:<25}")
+        print("=" * 70 + "\n")
 
     for user in User.query.all():
         if not user.role_id or not user.assigned_role:

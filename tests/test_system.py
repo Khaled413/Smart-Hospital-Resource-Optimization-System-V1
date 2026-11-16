@@ -76,9 +76,9 @@ def test_user_authentication(client):
     res_case = client.post('/api/auth/login', json={'username': 'ADMIN', 'password': 'Admin#2025!'})
     assert res_case.status_code == 200
 
-    # Legacy credentials compatibility fallback
+    # Legacy unconfigured passwords are rejected without hardcoded backdoors
     res_legacy = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
-    assert res_legacy.status_code == 200
+    assert res_legacy.status_code == 401
 
     # Failed login with wrong password
     res_fail = client.post('/api/auth/login', json={'username': 'admin', 'password': 'wrongpassword'})

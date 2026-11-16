@@ -5,6 +5,8 @@ Includes Users, RBAC, Beds, Equipment, Triage Vitals, and Audit Logs.
 
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timezone
+import secrets
+import re
 from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
@@ -13,6 +15,74 @@ db = SQLAlchemy()
 def utc_now():
     """Return timezone-aware current UTC datetime."""
     return datetime.now(timezone.utc)
+
+
+COMMON_INSECURE_PASSWORDS = {
+    'password', 'password123', 'admin', 'admin123', 'hospital',
+    'hospital123', 'doctor', 'doctor123', 'nurse', 'reception',
+    'manager', 'medicare', '123456789012', 'qwertyuiopas', 'welcome12345'
+}
+
+
+def validate_password_complexity(password: str, user=None) -> tuple[bool, str | None]:
+    """
+    Validate password complexity:
+    - Minimum length: 12 characters.
+    - Requires at least one uppercase letter, one lowercase letter, one digit, and one special symbol.
+    - Rejects common patterns, predictable repetitions, sequences, and personal identifier leaks.
+    """
+    if not password or len(password) < 12:
+        return False, "Password must be at least 12 characters long."
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter (A-Z)."
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter (a-z)."
+    if not re.search(r'\d', password):
+        return False, "Password must contain at least one digit (0-9)."
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{}|;:,.<>?~`]', password):
+        return False, "Password must contain at least one special character (e.g. !@#$%^&*)."
+    if re.search(r'(.)\1{3,}', password):
+        return False, "Password contains too many repeated consecutive characters."
+
+    lower_pwd = password.lower()
+    common_sequences = ['123456', '654321', '234567', '765432', 'abcdef', 'qwerty', 'asdfgh', 'zxcvbn']
+    for seq in common_sequences:
+        if seq in lower_pwd:
+            return False, f"Password cannot contain simple keyboard sequences like '{seq}'."
+
+    for word in COMMON_INSECURE_PASSWORDS:
+        if word in lower_pwd:
+            return False, "Password contains common or predictable words."
+
+    if user:
+        uname = (getattr(user, 'username', '') or '').lower()
+        if len(uname) >= 3 and uname in lower_pwd:
+            return False, "Password cannot contain your username."
+        email = (getattr(user, 'email', '') or '').lower()
+        email_prefix = email.split('@')[0] if '@' in email else ''
+        if len(email_prefix) >= 3 and email_prefix in lower_pwd:
+            return False, "Password cannot contain your email identifier."
+
+    return True, None
+
+
+def generate_secure_temporary_password(length=14) -> str:
+    """Generate a cryptographically secure temporary password exceeding minimum complexity requirements."""
+    chars_upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    chars_lower = "abcdefghijkmnopqrstuvwxyz"
+    chars_digits = "23456789"
+    chars_symbols = "!@#$%^&*()_+-="
+    all_chars = chars_upper + chars_lower + chars_digits + chars_symbols
+
+    pwd = [
+        secrets.choice(chars_upper), secrets.choice(chars_upper),
+        secrets.choice(chars_lower), secrets.choice(chars_lower),
+        secrets.choice(chars_digits), secrets.choice(chars_digits),
+        secrets.choice(chars_symbols), secrets.choice(chars_symbols),
+    ]
+    pwd += [secrets.choice(all_chars) for _ in range(max(0, length - len(pwd)))]
+    secrets.SystemRandom().shuffle(pwd)
+    return ''.join(pwd)
 
 
 # ─── Dynamic RBAC Models ───────────────────────────────────────────────────────
