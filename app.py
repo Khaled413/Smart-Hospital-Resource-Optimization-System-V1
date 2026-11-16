@@ -1609,15 +1609,8 @@ def api_run_simulation():
 @app.route('/api/analytics/wait-time')
 @require_permission('analytics.view')
 def api_analytics_wait_time():
-    result = {}
-    for priority in ['critical', 'urgent', 'normal', 'low']:
-        appts = db.session.query(Appointment).join(Patient).filter(Patient.priority == priority).all()
-        if appts:
-            avg = sum(a.waiting_time for a in appts) / len(appts)
-            result[priority] = round(avg, 1)
-        else:
-            result[priority] = 0
-    return jsonify(result)
+    target_date = request.args.get('date')
+    return jsonify(MetricsService.get_wait_time_by_priority(target_date))
 
 
 @app.route('/api/analytics/utilization')

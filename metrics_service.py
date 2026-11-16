@@ -23,6 +23,22 @@ class MetricsService:
         return round(float(avg_wait or 0.0), 1)
 
     @staticmethod
+    def get_wait_time_by_priority(target_date: str | None = None) -> dict[str, float]:
+        """Calculate average wait time in minutes grouped by patient priority via aggregate SQL AVG and GROUP BY."""
+        query = (
+            db.session.query(
+                Patient.priority,
+                db.func.coalesce(db.func.avg(Appointment.waiting_time), 0.0)
+            )
+            .join(Patient, Appointment.patient_id == Patient.id)
+            .filter(Appointment.status != 'cancelled')
+        )
+        if target_date:
+            query = query.filter(Appointment.date == target_date)
+        rows = dict(query.group_by(Patient.priority).all())
+        return {p: round(float(rows.get(p, 0.0)), 1) for p in ['critical', 'urgent', 'normal', 'low']}
+
+    @staticmethod
     def get_overall_utilization(target_date: str) -> dict:
         """
         Calculate total hospital capacity utilization percentage for target_date.

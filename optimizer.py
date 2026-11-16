@@ -162,12 +162,13 @@ def sync_triage_and_priority(priority: str = None, triage_level: int = None):
 
 def calculate_waiting_time(patient, doctor, slot_start: int, target_date: str) -> int:
     """
-    Measure waiting time as slot_start - max(arrival_time, doctor_shift_start).
-    If patient.registered_at is on target_date, use registered_at time.
-    Otherwise, default to doctor's shift start.
+    Measure waiting time in minutes:
+    - start - max(arrival, shift_start) when arrival is known
+    - start - shift_start when arrival is unknown (never start - 0 = large meaningless minutes)
+    Guarantees non-negative integer.
     """
-    doc_start = time_to_minutes(doctor.available_from)
-    arrival_min = doc_start
+    shift_start = time_to_minutes(doctor.available_from) if (doctor and hasattr(doctor, 'available_from')) else 8 * 60
+    arrival_min = None
 
     reg_at = getattr(patient, 'registered_at', None)
     if reg_at:
@@ -179,10 +180,21 @@ def calculate_waiting_time(patient, doctor, slot_start: int, target_date: str) -
                 t_part = reg_at.split('T')[-1][:5]
                 arrival_min = time_to_minutes(t_part)
         except Exception:
-            arrival_min = doc_start
+            arrival_min = None
 
-    effective_start = max(arrival_min, doc_start)
-    return max(0, slot_start - effective_start)
+    if arrival_min is None and hasattr(patient, 'arrival_time') and patient.arrival_time:
+        try:
+            arrival_min = time_to_minutes(patient.arrival_time)
+        except Exception:
+            arrival_min = None
+
+    if arrival_min is not None:
+        effective_baseline = max(arrival_min, shift_start)
+    else:
+        # Arrival is unknown: wait is measured from doctor's shift start, never from 00:00 midnight
+        effective_baseline = shift_start
+
+    return max(0, slot_start - effective_baseline)
 
 
 # ─── Schedule State Tracker ───────────────────────────────────────────────────
