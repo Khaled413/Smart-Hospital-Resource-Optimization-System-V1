@@ -332,18 +332,46 @@ docker compose up --build -d
 ```
 Access the application at `http://localhost:5000`.
 
-### ☁️ Vercel Serverless Deployment
+### ☁️ Production Deployment (Vercel & Supabase PostgreSQL)
 
-MediOptim Pro includes native configuration for instant serverless cloud deployment:
-* **Serverless Entrypoint**: Pre-configured with `vercel.json`, `api/index.py`, and `.vercelignore`.
-* **Automatic Database Provisioning**: In serverless runtimes, SQLite is initialized at `/tmp/hospital.db` and seeded on cold-start, or connects to external PostgreSQL (e.g. Supabase, Neon) via `DATABASE_URL`.
-* **Fault-Tolerant Optimizer**: The optimizer automatically detects serverless lambda environments and falls back to dynamic heuristics if external solver binaries are unavailable.
+MediOptim Pro is fully architected for serverless deployments on **Vercel** backed by **Supabase PostgreSQL**:
 
-```bash
-# Deploy with Vercel CLI:
-npm install -g vercel
-vercel
-```
+1. **Persistent Data Layer (Supabase PostgreSQL)**:
+   - **Transaction Pooler (Supavisor)** on port `6543` with `sslmode=require` is used for serverless runtime requests to prevent connection exhaustion.
+   - **SQLAlchemy NullPool** with connection pre-ping (`pool_pre_ping=True`) ensures serverless instances do not hold idle connections across cold starts.
+   - **Row Level Security (RLS)** is enabled on all tables with zero public policies, blocking direct unauthorized access via Supabase's PostgREST API while allowing the application direct DB connection.
+
+2. **Database Connection Configuration**:
+   ```bash
+   # Vercel Runtime Environment Variable (Port 6543 Transaction Pooler):
+   DATABASE_URL="postgresql://postgres.[project-ref]:[URL-ENCODED-PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require"
+
+   # Dedicated Migration / CLI URL (Port 5432 Direct / Session Connection):
+   MIGRATION_DATABASE_URL="postgresql://postgres:[URL-ENCODED-PASSWORD]@db.[project-ref].supabase.co:5432/postgres?sslmode=require"
+   ```
+   > **Note on Special Characters**: If your database password contains special characters (`@`, `:`, `/`, `#`, `%`, `[`), URL-encode it using Python:
+   > ```python
+   > import urllib.parse; print(urllib.parse.quote_plus("YourPassword#123"))
+   > ```
+
+3. **Running Migrations & Seeding**:
+   Never run migrations inside serverless functions on cold start. Run them from your local machine, CI/CD, or trusted terminal:
+   ```bash
+   # Apply initial schema migration to Supabase:
+   flask db upgrade
+
+   # Enforce Row Level Security (RLS) on all tables:
+   python scripts/enable_rls.py
+
+   # Seed initial clinical data (idempotent; safe to run once):
+   flask seed
+   ```
+
+4. **Deploying to Vercel**:
+   ```bash
+   npm install -g vercel
+   vercel --prod
+   ```
 
 ---
 
@@ -356,12 +384,21 @@ Smart-Hospital-Resource-Optimization-System-V1/
 │   └── index.py            # Vercel Serverless WSGI entrypoint
 ├── vercel.json             # Vercel cloud serverless routing & function settings
 ├── .vercelignore           # Deployment asset exclusions
+├── migrations/             # Flask-Migrate / Alembic database schema migrations
+├── scripts/
+│   ├── enable_rls.sql      # Supabase Row Level Security hardening script
+│   ├── enable_rls.py       # Automated RLS auditor & verification tool
+│   ├── supabase_setup.sql  # Dedicated least-privilege DB role setup
+│   ├── backup_supabase.sh  # pg_dump automated backup utility
+│   └── migrate_sqlite_to_postgres.py # SQLite to PostgreSQL data migration tool
+├── docs/
+│   └── COMPLIANCE.md       # Egyptian Law 151/2020 Data Protection Policy
 ├── models.py               # SQLAlchemy ORM models (Users, Beds, Equipment, Permissions)
 ├── permissions.py          # Authoritative 36-permission catalog & default matrices
 ├── optimizer.py            # PuLP Linear Programming, Greedy & Code Red engine
 ├── config.py               # Application configuration & security settings
 ├── seed_data.py            # Clinical database seeder with realistic records
-├── requirements.txt        # Pinned Python dependencies
+├── requirements.txt        # Pinned Python dependencies (Flask-Migrate, psycopg2, etc.)
 ├── Dockerfile              # Production Docker image with Coin-OR CBC
 ├── docker-compose.yml      # Multi-container orchestration
 ├── docs/

@@ -5,7 +5,7 @@ Crisis Simulation, Export, and Optimization Services.
 """
 
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, Response, send_from_directory, g
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import csv
 import io
 import os
@@ -14,6 +14,7 @@ from functools import wraps
 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_migrate import Migrate
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
@@ -21,7 +22,7 @@ from config import get_config, config_by_name
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment,
     Appointment, OptimizationRun, User, AuditLog,
-    Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name
+    Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name, utc_now
 )
 from permissions import (
     PERMISSION_CATALOG, PERMISSION_MAP, PERMISSION_GROUPS,
@@ -64,46 +65,25 @@ def ratelimit_handler(e):
         return jsonify({'error': 'Too many requests. Please wait a moment and try again.'}), 429
     return render_template('login.html', error='Too many requests. Please wait a moment and try again.'), 429
 
-# Handle Vercel / Serverless database persistence & pre-seeding
-IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
+db.init_app(app)
+migrate = Migrate(app, db)
 
-if IS_VERCEL:
-    import tempfile
-    import shutil
-    tmp_db = os.path.join(tempfile.gettempdir(), 'hospital.db')
-    repo_db = os.path.join(app.root_path, 'instance', 'hospital.db')
-    if os.path.exists(repo_db) and not os.path.exists(tmp_db):
-        try:
-            shutil.copy2(repo_db, tmp_db)
-        except Exception:
-            pass
-else:
+# Ensure local dev instance directory exists when using SQLite
+if not app.config.get('SQLALCHEMY_DATABASE_URI', '').startswith('postgresql'):
     try:
         os.makedirs(os.path.join(app.root_path, 'instance'), exist_ok=True)
     except Exception:
         pass
 
-db.init_app(app)
 
-with app.app_context():
-    try:
-        # Lightweight schema migration for SQLite columns
-        try:
-            with db.engine.connect() as conn:
-                res = conn.execute(db.text("PRAGMA table_info(users)")).fetchall()
-                cols = [r[1] for r in res]
-                if cols:
-                    if 'role_id' not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN role_id INTEGER REFERENCES roles(id)"))
-                    if 'permissions_version' not in cols:
-                        conn.execute(db.text("ALTER TABLE users ADD COLUMN permissions_version INTEGER DEFAULT 1"))
-                    conn.commit()
-        except Exception:
-            pass
-        db.create_all()
+@app.cli.command('seed')
+def seed_cli():
+    """Explicit idempotent CLI seeding command for permissions, system roles, and baseline hospital data."""
+    with app.app_context():
+        from seed_data import seed_database
+        print("[CLI] Commencing explicit database seeding...")
         seed_database()
-    except Exception as e:
-        print(f"Database initialization note: {e}")
+        print("[CLI] Database seeding completed successfully.")
 
 
 @app.route('/favicon.ico')
@@ -205,12 +185,12 @@ def get_current_date():
 
 def get_current_user():
     """Return the currently authenticated User instance or None."""
-    if hasattr(g, 'current_user'):
-        return g.current_user
     user_id = session.get('user_id')
     if not user_id:
         g.current_user = None
         return None
+    if getattr(g, 'current_user', None) and getattr(g.current_user, 'id', None) == user_id:
+        return g.current_user
     user = db.session.get(User, user_id)
     if not user or not user.is_active:
         g.current_user = None
@@ -578,8 +558,14 @@ def api_login():
     ).first()
     if user:
         # Check if account is temporarily locked
-        if user.locked_until and user.locked_until > datetime.utcnow():
-            mins_left = max(1, int((user.locked_until - datetime.utcnow()).total_seconds() / 60))
+        now = utc_now()
+        # Handle both timezone-aware and legacy naive locked_until timestamps safely
+        locked_until = user.locked_until
+        if locked_until and locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+
+        if locked_until and locked_until > now:
+            mins_left = max(1, int((locked_until - now).total_seconds() / 60))
             return jsonify({
                 'error': f'Account is temporarily locked due to multiple failed login attempts. Try again in {mins_left} minute(s).'
             }), 403
@@ -606,7 +592,7 @@ def api_login():
         if not is_valid:
             user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
             if user.failed_login_attempts >= 5:
-                user.locked_until = datetime.utcnow() + timedelta(minutes=15)
+                user.locked_until = now + timedelta(minutes=15)
                 db.session.commit()
                 log_audit('LOCKOUT', 'user', user.id, f"User {user.username} locked out after 5 consecutive failed login attempts")
                 return jsonify({
@@ -868,7 +854,7 @@ def api_add_patient():
         heart_rate=safe_int(data.get('heart_rate'), 75),
         spo2=safe_int(data.get('spo2'), 98),
         temperature=safe_float(data.get('temperature'), 37.0),
-        registered_at=datetime.utcnow()
+        registered_at=utc_now()
     )
     patient.no_show_risk = predict_no_show_risk(patient)
     db.session.add(patient)
@@ -1383,7 +1369,7 @@ def api_emergency_walkin():
         spo2=safe_int(data.get('spo2'), 92),
         temperature=safe_float(data.get('temperature'), 37.5),
         no_show_risk=0.01,
-        registered_at=datetime.utcnow()
+        registered_at=utc_now()
     )
     db.session.add(patient)
     db.session.flush()

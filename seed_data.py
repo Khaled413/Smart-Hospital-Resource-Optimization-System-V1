@@ -3,7 +3,10 @@ seed_data.py - Enhanced Sample Data Seeder for Smart Hospital Resource Optimizat
 Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Beds, Equipment, and Patients with clinical vitals.
 """
 
-from models import db, Department, Doctor, Patient, Room, Bed, Equipment, User, Appointment, OptimizationRun, Permission, Role, UserPermissionOverride
+from models import (
+    db, Department, Doctor, Patient, Room, Bed, Equipment, User,
+    Appointment, OptimizationRun, Permission, Role, UserPermissionOverride, utc_now
+)
 from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
 from datetime import datetime, date, timedelta
@@ -130,13 +133,7 @@ def seed_permissions_and_roles():
             if not user.role_id and r_obj:
                 user.role_id = r_obj.id
             user.is_active = True
-            user.must_change_password = False
-            # Unlock account if previously locked out
-            user.failed_login_attempts = 0
-            user.locked_until = None
-            # If default user password doesn't match configured password, synchronize it
-            if not user.check_password(udata['pass']):
-                user.set_password(udata['pass'])
+            # Never overwrite existing user passwords on re-seeding
 
     for user in User.query.all():
         if not user.role_id or not user.assigned_role:
@@ -311,7 +308,7 @@ def seed_base_data(roles_by_name):
             heart_rate=p["hr"],
             spo2=p["spo2"],
             temperature=p["temp"],
-            registered_at=datetime.utcnow()
+            registered_at=utc_now()
         )
         patient.no_show_risk = predict_no_show_risk(patient)
         db.session.add(patient)
@@ -379,7 +376,7 @@ def seed_appointments_and_runs():
             "[GREEDY] Finished. Assigned: 10, Unassigned: 0\n"
             "[HYBRID] Final Result: Assigned=20, Unassigned=0, Room Conflicts=0"
         ),
-        created_at=datetime.utcnow()
+        created_at=utc_now()
     )
     db.session.add(opt_run)
     db.session.flush()
@@ -439,7 +436,7 @@ def seed_appointments_and_runs():
                 clinical_notes=clin_notes,
                 prescription=rx,
                 optimization_run_id=opt_run.id,
-                created_at=datetime.utcnow()
+                created_at=utc_now()
             )
             db.session.add(appt)
 
@@ -472,7 +469,7 @@ def seed_appointments_and_runs():
                 clinical_notes=clin_notes,
                 prescription=rx,
                 optimization_run_id=opt_run.id,
-                created_at=datetime.utcnow() - timedelta(days=1)
+                created_at=utc_now() - timedelta(days=1)
             )
             db.session.add(appt)
 
@@ -504,7 +501,7 @@ def seed_appointments_and_runs():
                 clinical_notes=clin_notes,
                 prescription=rx,
                 optimization_run_id=None,
-                created_at=datetime.utcnow()
+                created_at=utc_now()
             )
             db.session.add(appt)
 

@@ -1,0 +1,50 @@
+name: Supabase Scheduled Backup & Keep-Alive
+
+on:
+  schedule:
+    # Runs every day at 03:00 UTC (keeps Supabase free project active and backs up data)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup-and-keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL Client Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client gzip
+
+      - name: Ping Supabase & Prevent Inactivity Pausing
+        env:
+          TARGET_URL: ${{ secrets.MIGRATION_DATABASE_URL || secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$TARGET_URL" ]; then
+            echo "DATABASE_URL secret is not set. Skipping ping."
+            exit 0
+          fi
+          echo "Pinging Supabase database to refresh active activity status..."
+          psql "$TARGET_URL" -c "SELECT current_database(), current_timestamp;"
+
+      - name: Run Database Backup
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL || secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$MIGRATION_DATABASE_URL" ]; then
+            echo "No database URL configured. Skipping backup."
+            exit 0
+          fi
+          chmod +x ./scripts/backup_supabase.sh
+          ./scripts/backup_supabase.sh ./backups
+
+      - name: Upload Encrypted Backup Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-database-backup-${{ github.run_id }}
+          path: ./backups/*.sql.gz
+          retention-days: 14

@@ -4,10 +4,15 @@ Includes Users, RBAC, Beds, Equipment, Triage Vitals, and Audit Logs.
 """
 
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
+
+
+def utc_now():
+    """Return timezone-aware current UTC datetime."""
+    return datetime.now(timezone.utc)
 
 
 # ─── Dynamic RBAC Models ───────────────────────────────────────────────────────
@@ -31,7 +36,7 @@ class Permission(db.Model):
     label_ar = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text, default='')
     is_sensitive = db.Column(db.Boolean, default=False, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     def to_dict(self):
         return {
@@ -55,8 +60,8 @@ class Role(db.Model):
     is_system = db.Column(db.Boolean, default=False, nullable=False)  # System roles cannot be deleted
     is_locked = db.Column(db.Boolean, default=False, nullable=False)  # Admin role is locked: permissions immutable
     version = db.Column(db.Integer, default=1, nullable=False)        # Incremented on permission edit for cache busting
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     # Relationships
     permissions = db.relationship('Permission', secondary=role_permissions, backref=db.backref('roles', lazy='dynamic'), lazy='joined')
@@ -93,7 +98,7 @@ class UserPermissionOverride(db.Model):
     effect = db.Column(db.String(10), nullable=False)  # 'grant' or 'deny'
     reason = db.Column(db.String(255), nullable=False)
     created_by = db.Column(db.String(80), default='admin')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationship
     permission = db.relationship('Permission', lazy='joined')
@@ -128,9 +133,9 @@ class User(db.Model):
     must_change_password = db.Column(db.Boolean, default=False, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     failed_login_attempts = db.Column(db.Integer, default=0, nullable=False)
-    locked_until = db.Column(db.DateTime, nullable=True)
+    locked_until = db.Column(db.DateTime(timezone=True), nullable=True)
     permissions_version = db.Column(db.Integer, default=1, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     doctor = db.relationship('Doctor', backref=db.backref('user_account', uselist=False))
     permission_overrides = db.relationship('UserPermissionOverride', backref='user', cascade='all, delete-orphan', lazy='joined')
@@ -202,7 +207,7 @@ class Department(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     capacity = db.Column(db.Integer, default=50)
     description = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     doctors = db.relationship('Doctor', backref='dept', lazy=True)
@@ -236,14 +241,14 @@ class Doctor(db.Model):
     max_patients_per_day = db.Column(db.Integer, default=10)
     available_from = db.Column(db.String(10), default='08:00')  # HH:MM
     available_until = db.Column(db.String(10), default='17:00')  # HH:MM
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     appointments = db.relationship('Appointment', backref='doctor', lazy=True)
 
     def to_dict(self, appointments_today=None):
         if appointments_today is None:
-            today_iso = datetime.utcnow().date().isoformat()
+            today_iso = datetime.now(timezone.utc).date().isoformat()
             appointments_today = Appointment.query.filter(
                 Appointment.doctor_id == self.id,
                 Appointment.date == today_iso,
@@ -275,7 +280,7 @@ class Room(db.Model):
     room_type = db.Column(db.String(50), default='consultation')  # consultation, surgery, icu, ward
     capacity = db.Column(db.Integer, default=1)
     status = db.Column(db.String(20), default='available')  # available, occupied, maintenance
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     appointments = db.relationship('Appointment', backref='room', lazy=True)
@@ -310,7 +315,7 @@ class Bed(db.Model):
     admission_date = db.Column(db.String(20), default='')
     expected_discharge = db.Column(db.String(20), default='')
     notes = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     patient = db.relationship('Patient', backref=db.backref('admitted_bed', uselist=False))
 
@@ -344,7 +349,7 @@ class Equipment(db.Model):
     room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'), nullable=True)
     status = db.Column(db.String(30), default='available')  # available, in_use, maintenance
     notes = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     def to_dict(self):
         return {
@@ -386,6 +391,7 @@ class Patient(db.Model):
     priority = db.Column(db.String(20), default='normal')  # critical, urgent, normal, low
     required_specialization = db.Column(db.String(100), nullable=False)
     condition_description = db.Column(db.Text, default='')
+    # TODO: Convert preferred_date string to Date native type in a future schema migration.
     preferred_date = db.Column(db.String(20), default='')
     
     # Clinical Triage & Vitals
@@ -398,8 +404,12 @@ class Patient(db.Model):
     # ML Prediction
     no_show_risk = db.Column(db.Float, default=0.1)  # 0.0 to 1.0 probability
     
-    registered_at = db.Column(db.DateTime, default=datetime.utcnow)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    registered_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        db.Index('idx_patients_priority_preferred_date', 'priority', 'preferred_date'),
+    )
 
     # Relationships
     appointments = db.relationship('Appointment', backref='patient', lazy=True)
@@ -465,6 +475,7 @@ class Appointment(db.Model):
     patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False)
     doctor_id = db.Column(db.Integer, db.ForeignKey('doctors.id'), nullable=False)
     room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'), nullable=False)
+    # TODO: Convert date, start_time, end_time strings to Date and Time native types in a future schema migration.
     date = db.Column(db.String(20), nullable=False)
     start_time = db.Column(db.String(10), nullable=False)
     end_time = db.Column(db.String(10), nullable=False)
@@ -478,7 +489,11 @@ class Appointment(db.Model):
     clinical_notes = db.Column(db.Text, default='')
     prescription = db.Column(db.Text, default='')
     optimization_run_id = db.Column(db.Integer, db.ForeignKey('optimization_runs.id'), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        db.Index('idx_appointments_lookup', 'date', 'doctor_id', 'room_id', 'status'),
+    )
 
     equipment = db.relationship('Equipment', backref='appointments', lazy=True)
 
@@ -545,7 +560,7 @@ class OptimizationRun(db.Model):
     utilization_rate = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='success')  # success, failed, partial
     solver_log = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
 
     # Relationships
     appointments = db.relationship('Appointment', backref='optimization_run', lazy=True)
@@ -581,7 +596,11 @@ class AuditLog(db.Model):
     resource_type = db.Column(db.String(50), nullable=False)  # patient, doctor, appointment, bed, etc.
     resource_id = db.Column(db.Integer, nullable=True)
     details = db.Column(db.Text, default='')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        db.Index('idx_audit_logs_created_at', 'created_at'),
+    )
 
     def to_dict(self):
         return {

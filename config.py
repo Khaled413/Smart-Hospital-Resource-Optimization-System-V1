@@ -1,40 +1,74 @@
 """
 config.py - Application Configuration for Smart Hospital Resource Optimization System
-Handles environment variable loading, strict security validations, session cookies, and operational constants.
+Handles environment variable loading, strict security validations, session cookies,
+Supabase PostgreSQL connection pooling (NullPool, transaction mode port 6543), and operational constants.
 """
 
 import os
-import tempfile
 from datetime import timedelta
+from urllib.parse import quote_plus
+from sqlalchemy.pool import NullPool
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 # Detect if running in Vercel Serverless or AWS Lambda
 IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
 
-# Configure Database URL
-database_url = os.environ.get('DATABASE_URL')
 
-if database_url:
-    # Normalize legacy postgres:// to postgresql:// for SQLAlchemy compatibility
-    if database_url.startswith('postgres://'):
-        database_url = database_url.replace('postgres://', 'postgresql://', 1)
-else:
-    if IS_VERCEL:
-        # In Vercel serverless functions, only temporary directory is writable
-        DEFAULT_DB_PATH = os.path.join(tempfile.gettempdir(), 'hospital.db')
-    else:
-        DEFAULT_DB_PATH = os.path.join(BASE_DIR, 'instance', 'hospital.db')
-    # Standardize forward slashes for SQLite URI
-    clean_path = DEFAULT_DB_PATH.replace('\\', '/')
+def normalize_database_url(url: str | None) -> str:
+    """
+    Normalize PostgreSQL database URL for SQLAlchemy and psycopg2 driver compatibility.
+    Replaces postgres:// or postgresql:// with postgresql+psycopg2://
+    """
+    if not url:
+        return ''
+    trimmed = url.strip()
+    if trimmed.startswith('postgres://'):
+        return trimmed.replace('postgres://', 'postgresql+psycopg2://', 1)
+    if trimmed.startswith('postgresql://'):
+        return trimmed.replace('postgresql://', 'postgresql+psycopg2://', 1)
+    return trimmed
+
+
+# Primary Runtime Database URL (Supabase pooled connection string, Supavisor port 6543)
+raw_db_url = os.environ.get('DATABASE_URL')
+database_url = normalize_database_url(raw_db_url)
+
+# Dedicated Migration Database URL (Direct connection, port 5432 or session pooler)
+raw_migration_url = os.environ.get('MIGRATION_DATABASE_URL')
+migration_database_url = normalize_database_url(raw_migration_url) or database_url
+
+if not database_url:
+    # Local fallback for development and unit testing when DATABASE_URL is unset
+    default_db_path = os.path.join(BASE_DIR, 'instance', 'hospital.db')
+    clean_path = default_db_path.replace('\\', '/')
     database_url = f"sqlite:///{clean_path}"
+
+is_postgres = database_url.startswith('postgresql')
+
+# SQLAlchemy Engine Options for serverless PostgreSQL
+# In Vercel serverless functions with Supabase pooled connection string (Supavisor port 6543):
+# - NullPool ensures ephemeral serverless instances do not hold idle connections.
+# - pool_pre_ping validates connection liveness before query execution.
+# - sslmode=require enforces TLS in transit.
+engine_options = {}
+if is_postgres:
+    engine_options = {
+        'poolclass': NullPool,
+        'pool_pre_ping': True,
+        'connect_args': {
+            'sslmode': 'require'
+        }
+    }
 
 
 class Config:
     # Core Security Settings
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-insecure-secret-key-change-in-prod')
     SQLALCHEMY_DATABASE_URI = database_url
+    SQLALCHEMY_ENGINE_OPTIONS = engine_options
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    MIGRATION_DATABASE_URI = migration_database_url
     
     # Session Cookie Hardening
     SESSION_COOKIE_HTTPONLY = True
@@ -42,7 +76,7 @@ class Config:
     SESSION_COOKIE_SECURE = False  # Enabled in ProductionConfig
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
 
-    # Timezone Configuration
+    # Timezone Configuration (Africa/Cairo standard for hospital operations)
     APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'Africa/Cairo')
     
     # Demo Mode (Restricted read-only demo viewer)
@@ -73,11 +107,13 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     DEBUG = False
     SESSION_COOKIE_SECURE = True
+    # Production strictly forbids SQLite and requires valid PostgreSQL connection string
 
 
 class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SQLALCHEMY_ENGINE_OPTIONS = {}
     DEBUG = True
     SESSION_COOKIE_SECURE = False
     WTF_CSRF_ENABLED = False
@@ -116,5 +152,18 @@ def get_config(env_name=None):
                 "and cannot use a known default or insecure value."
             )
         cfg_class.SECRET_KEY = prod_secret
+
+        prod_db_url = os.environ.get('DATABASE_URL')
+        if not prod_db_url or not prod_db_url.strip():
+            raise ValueError(
+                "CRITICAL DATABASE CONFIGURATION ERROR: "
+                "In production mode (or on Vercel), the 'DATABASE_URL' environment variable must be explicitly configured "
+                "pointing to your Supabase PostgreSQL database. SQLite is strictly forbidden in production."
+            )
+        if not (prod_db_url.startswith('postgres://') or prod_db_url.startswith('postgresql://') or prod_db_url.startswith('postgresql+')):
+            raise ValueError(
+                "CRITICAL DATABASE CONFIGURATION ERROR: "
+                f"'DATABASE_URL' must be a valid PostgreSQL connection string in production, got: {prod_db_url[:12]}..."
+            )
 
     return cfg_class

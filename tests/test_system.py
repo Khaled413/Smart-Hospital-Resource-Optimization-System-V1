@@ -25,6 +25,21 @@ from optimizer import (
 )
 
 
+@pytest.fixture(autouse=True)
+def setup_test_db():
+    with app.app_context():
+        db.create_all()
+        from seed_data import seed_database
+        seed_database()
+        # Reset test state isolation
+        UserPermissionOverride.query.delete()
+        for u in User.query.all():
+            u.failed_login_attempts = 0
+            u.locked_until = None
+        db.session.commit()
+        yield
+
+
 @pytest.fixture
 def client():
     app.config['TESTING'] = True
@@ -139,7 +154,8 @@ def test_rbac_and_protected_routes(client):
     assert res_api.status_code == 401
 
     # 3. Login as receptionist
-    login_as(client, 'receptionist', 'Reception#2025!')
+    res_log = login_as(client, 'receptionist', 'Reception#2025!')
+    assert res_log.status_code == 200
 
     # Receptionist can view beds
     res_beds = client.get('/api/beds')
