@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 import random
 import math
 from collections import defaultdict
+from models import format_doctor_name
 
 
 class OptimizerResult(tuple):
@@ -358,7 +359,7 @@ def run_greedy(patients, doctors, rooms, target_date, schedule_state=None):
                     })
                     log.append(
                         f"[GREEDY] ✓ {patient.name} ({patient.priority.upper()}, {duration}m) → "
-                        f"Dr. {doctor.name} | Room {selected_room.room_number} | "
+                        f"{format_doctor_name(doctor.name, with_title=True)} | Room {selected_room.room_number} | "
                         f"{minutes_to_time(current_slot)}-{minutes_to_time(slot_end)} | Wait={wait_time}m"
                     )
                     assigned = True
@@ -564,7 +565,7 @@ def run_lp(patients, doctors, rooms, target_date, schedule_state=None):
             assigned_pids.add(pid)
             log.append(
                 f"[LP] ✓ {patient.name} ({patient.priority.upper()}) → "
-                f"Dr. {doctor.name} | Room {room.room_number} | "
+                f"{format_doctor_name(doctor.name, with_title=True)} | Room {room.room_number} | "
                 f"{minutes_to_time(start)}-{minutes_to_time(start + dur)} | wait={wait_time}m"
             )
 
@@ -753,7 +754,7 @@ def handle_emergency_preemption(emergency_patient, existing_appointments, doctor
             if state.is_doctor_free(doc.id, slot_candidate, slot_end):
                 for room in dept_rooms:
                     if state.is_room_free(room.id, slot_candidate, slot_end + buffer):
-                        log.append(f"[EMERGENCY] ✓ Found immediate opening with Dr. {doc.name} in Room {room.room_number}")
+                        log.append(f"[EMERGENCY] ✓ Found immediate opening with {format_doctor_name(doc.name, with_title=True)} in Room {room.room_number}")
                         return {
                             'action': 'immediate_slot',
                             'emergency_assignment': {

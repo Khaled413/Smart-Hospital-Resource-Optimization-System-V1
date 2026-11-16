@@ -25,7 +25,7 @@ from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment,
     Appointment, OptimizationRun, User, AuditLog,
     Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name, utc_now,
-    validate_password_complexity, generate_secure_temporary_password
+    validate_password_complexity, generate_secure_temporary_password, format_doctor_name
 )
 from permissions import (
     PERMISSION_CATALOG, PERMISSION_MAP, PERMISSION_GROUPS,
@@ -480,7 +480,8 @@ def inject_rbac_helpers():
         current_user=user,
         can=can,
         can_any=can_any,
-        user_permissions=sorted(list(user_perms))
+        user_permissions=sorted(list(user_perms)),
+        format_doctor_name=format_doctor_name
     )
 
 
@@ -1610,7 +1611,7 @@ def api_optimize():
         {
             'patient_name': a['patient'].name,
             'patient_priority': a['patient'].priority,
-            'doctor_name': a['doctor'].name,
+            'doctor_name': format_doctor_name(a['doctor'].name, with_title=True),
             'room_number': a['room'].room_number,
             'date': a['date'],
             'start_time': a['start_time'],

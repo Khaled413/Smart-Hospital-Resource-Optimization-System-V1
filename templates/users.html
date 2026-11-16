@@ -318,7 +318,7 @@ function populateFilterOptions() {
   crRole.innerHTML = allRoles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
 
   cuDoc.innerHTML = '<option value="">None (Non-Physician)</option>' +
-    allDoctors.map(d => `<option value="${d.id}">${d.name} (${d.specialization})</option>`).join('');
+    allDoctors.map(d => `<option value="${d.id}">${formatDoctorName(d.name, true)} (${d.specialization})</option>`).join('');
 
   omPerm.innerHTML = allPermissions.map(p =>
     `<option value="${p.key}">${p.key} — ${p.label_en}</option>`
@@ -346,7 +346,7 @@ function renderUsers(users) {
       : '<span style="color:var(--text-muted);font-size:12px;">Standard</span>';
 
     const docObj = allDoctors.find(d => d.id === u.doctor_id);
-    const doctorLabel = docObj ? `👨‍⚕️ ${docObj.name}` : '<span style="color:var(--text-muted);">—</span>';
+    const doctorLabel = docObj ? `👨‍⚕️ ${formatDoctorName(docObj.name, true)}` : '<span style="color:var(--text-muted);">—</span>';
 
     return `
       <tr>

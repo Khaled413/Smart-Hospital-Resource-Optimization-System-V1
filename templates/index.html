@@ -194,7 +194,7 @@ function renderCharts(data) {
   });
 
   // Doctor Utilization Chart
-  const docLabels = data.doctor_utilization.map(d => d.name.replace('Dr. ', ''));
+  const docLabels = data.doctor_utilization.map(d => formatDoctorName(d.name, false));
   const docValues = data.doctor_utilization.map(d => d.utilization);
 
   if (docChart) docChart.destroy();

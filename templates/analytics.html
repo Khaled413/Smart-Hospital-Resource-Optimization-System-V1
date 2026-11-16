@@ -145,7 +145,7 @@ async function loadAnalytics() {
     new Chart(document.getElementById('utilChart'), {
       type: 'bar',
       data: {
-        labels: utilData.map(d => d.doctor.replace('Dr. ', '')),
+        labels: utilData.map(d => formatDoctorName(d.doctor, false)),
         datasets: [
           {
             label: 'Booked',

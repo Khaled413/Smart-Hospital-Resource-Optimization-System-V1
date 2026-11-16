@@ -112,7 +112,7 @@ async function initSimulator() {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         <input type="checkbox" id="sim-doc-${d.id}" value="${d.id}" class="sim-doc-cb" style="accent-color:#ef4444">
         <label for="sim-doc-${d.id}" style="font-size:13px;cursor:pointer">
-          Dr. ${d.name} <span style="font-size:11px;color:var(--text-muted)">(${d.specialization})</span>
+          ${formatDoctorName(d.name, true)} <span style="font-size:11px;color:var(--text-muted)">(${d.specialization})</span>
         </label>
       </div>
     `).join('');

@@ -3,6 +3,20 @@
    MediOptim Pro - Smart Hospital Resource Optimization System
    ============================================================ */
 
+// ── Doctor Name Formatter Helper ──────────────────────────────
+function formatDoctorName(name, withTitle = true) {
+  if (!name) return '';
+  let cleaned = String(name).trim();
+  while (/^(?:dr\.|dr\b)\s*/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^(?:dr\.|dr\b)\s*/i, '').trim();
+  }
+  if (cleaned.toLowerCase() === 'dr' || cleaned.toLowerCase() === 'dr.') {
+    cleaned = '';
+  }
+  if (!cleaned) return '';
+  return withTitle ? `Dr. ${cleaned}` : cleaned;
+}
+
 // ── Toast Notifications ──────────────────────────────────────
 const ToastManager = {
   container: null,
@@ -252,7 +266,7 @@ async function submitEmergencyWalkin(e) {
   try {
     const res = await API.post('/api/emergency/walkin', payload);
     Modal.close('emergency-modal');
-    ToastManager.show(`🚨 Code Red Admitted: Assigned to Dr. ${res.emergency_appointment.doctor_name} in Room ${res.emergency_appointment.room_number}`, 'success', 5000);
+    ToastManager.show(`🚨 Code Red Admitted: Assigned to ${formatDoctorName(res.emergency_appointment.doctor_name, true)} in Room ${res.emergency_appointment.room_number}`, 'success', 5000);
     if (res.bumped_notice) {
       setTimeout(() => {
         ToastManager.show(`⚠️ ${res.bumped_notice}`, 'warning', 6000);

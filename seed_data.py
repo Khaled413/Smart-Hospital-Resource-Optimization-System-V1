@@ -6,7 +6,7 @@ Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Be
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment, User,
     Appointment, OptimizationRun, Permission, Role, UserPermissionOverride, utc_now,
-    generate_secure_temporary_password
+    generate_secure_temporary_password, format_doctor_name
 )
 from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
@@ -544,3 +544,10 @@ def seed_database():
     # Seed appointments and initial runs if appointments table is empty
     if Appointment.query.count() == 0:
         seed_appointments_and_runs()
+
+    # Normalize existing doctor names to eliminate duplicate 'Dr.' prefixes
+    for doc in Doctor.query.all():
+        normalized = format_doctor_name(doc.name, with_title=True)
+        if doc.name != normalized:
+            doc.name = normalized
+    db.session.commit()

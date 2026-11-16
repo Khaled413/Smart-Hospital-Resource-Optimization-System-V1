@@ -4,6 +4,7 @@ Includes Users, RBAC, Beds, Equipment, Triage Vitals, and Audit Logs.
 """
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import validates
 from datetime import datetime, timezone
 import secrets
 import re
@@ -83,6 +84,25 @@ def generate_secure_temporary_password(length=14) -> str:
     pwd += [secrets.choice(all_chars) for _ in range(max(0, length - len(pwd)))]
     secrets.SystemRandom().shuffle(pwd)
     return ''.join(pwd)
+
+
+def format_doctor_name(name: str | None, with_title: bool = True) -> str:
+    """
+    Normalizes a doctor's name, stripping duplicate or unwanted 'Dr.' prefixes.
+    When with_title=True, returns 'Dr. <Name>' (e.g., 'Dr. Sarah Mitchell').
+    When with_title=False, returns bare '<Name>' (e.g., 'Sarah Mitchell').
+    Guarantees it will never produce 'Dr. Dr. <Name>'.
+    """
+    if not name:
+        return ""
+    cleaned = str(name).strip()
+    while re.match(r'^(?:dr\.|dr\b)\s*', cleaned, flags=re.IGNORECASE):
+        cleaned = re.sub(r'^(?:dr\.|dr\b)\s*', '', cleaned, count=1, flags=re.IGNORECASE).strip()
+    if cleaned.lower() in ('dr', 'dr.'):
+        cleaned = ""
+    if not cleaned:
+        return ""
+    return f"Dr. {cleaned}" if with_title else cleaned
 
 
 # ─── Dynamic RBAC Models ───────────────────────────────────────────────────────
@@ -316,6 +336,18 @@ class Doctor(db.Model):
     # Relationships
     appointments = db.relationship('Appointment', backref='doctor', lazy=True)
 
+    @validates('name')
+    def validate_name(self, key, value):
+        return format_doctor_name(value, with_title=True)
+
+    @property
+    def clean_name(self):
+        return format_doctor_name(self.name, with_title=False)
+
+    @property
+    def formatted_name(self):
+        return format_doctor_name(self.name, with_title=True)
+
     @property
     def department(self):
         """Compatibility property alias for department relationship (backref 'dept')."""
@@ -331,7 +363,8 @@ class Doctor(db.Model):
             ).count()
         return {
             'id': self.id,
-            'name': self.name,
+            'name': format_doctor_name(self.name, with_title=True),
+            'clean_name': format_doctor_name(self.name, with_title=False),
             'specialization': self.specialization,
             'department_id': self.department_id,
             'department_name': self.dept.name if self.dept else 'Unknown',
@@ -597,7 +630,7 @@ class Appointment(db.Model):
             'patient_priority': self.patient.priority if self.patient else 'normal',
             'patient_triage': (self.patient.triage_level if self.patient else 3) if can_view_clinical else None,
             'doctor_id': self.doctor_id,
-            'doctor_name': self.doctor.name if self.doctor else 'Unknown',
+            'doctor_name': format_doctor_name(self.doctor.name, with_title=True) if self.doctor else 'Unknown',
             'doctor_specialization': self.doctor.specialization if self.doctor else '',
             'room_id': self.room_id,
             'room_number': self.room.room_number if self.room else 'Unknown',
