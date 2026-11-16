@@ -1,0 +1,9 @@
+{
+  "postgres-language-server.enabled": true,
+  "postgres-language-server.bin": "./node_modules/@postgres-language-server/cli-x86_64-windows-msvc/postgres-language-server.exe",
+  "postgres-language-server.configFile": "./postgres-language-server.jsonc",
+  "postgres-language-server.allowVersionChecks": true,
+  "[sql]": {
+    "editor.defaultFormatter": "Supabase.postgrestools"
+  }
+}

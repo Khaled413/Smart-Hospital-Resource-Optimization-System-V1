@@ -79,9 +79,9 @@ def test_department_manage_permission_guards(client):
         if not rec:
             rec_role = Role.query.filter_by(name='receptionist').first()
             rec = User(username='receptionist', email='rec@hospital.com', full_name='Receptionist', role_id=rec_role.id)
-            rec.set_password('Reception#2025!')
             db.session.add(rec)
-            db.session.commit()
+        rec.set_password('Reception#2025!')
+        db.session.commit()
 
     client.post('/api/auth/login', json={'username': 'receptionist', 'password': 'Reception#2025!'})
 
