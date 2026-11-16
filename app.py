@@ -579,8 +579,8 @@ def simulator_page():
 @app.route('/queue-display')
 def queue_display_page():
     token = request.args.get('token')
-    configured_token = app.config.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
-    if token and secrets.compare_digest(token, configured_token):
+    configured_token = app.config.get('KIOSK_VIEW_TOKEN')
+    if token and configured_token and secrets.compare_digest(token, configured_token):
         return render_template('queue_display.html', kiosk_token=token)
 
     user = get_current_user()
@@ -594,10 +594,10 @@ def queue_display_page():
 @app.route('/api/queue-display/feed', methods=['GET'])
 def api_queue_display_feed():
     token = request.args.get('token') or request.headers.get('X-Kiosk-Token')
-    configured_token = app.config.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    configured_token = app.config.get('KIOSK_VIEW_TOKEN')
     is_authenticated = False
 
-    if token and secrets.compare_digest(token, configured_token):
+    if token and configured_token and secrets.compare_digest(token, configured_token):
         is_authenticated = True
     else:
         user = get_current_user()

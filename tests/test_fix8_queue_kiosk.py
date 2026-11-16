@@ -165,3 +165,34 @@ def test_kiosk_privacy_no_clinical_leak_and_neutral_priority(kiosk_client):
         # Check neutral priority labels
         assert item['priority_label'] in ('Immediate', 'Priority', 'Regular')
         assert item['priority_label'] != 'Triage 1'
+
+
+def test_kiosk_production_guard_and_random_generation(monkeypatch):
+    """Verify production requires non-default KIOSK_VIEW_TOKEN and dev generates random token."""
+    from config import get_config, ProductionConfig, Config
+
+    # In production with missing or default token: must raise ValueError
+    monkeypatch.setenv('FLASK_ENV', 'production')
+    monkeypatch.setenv('SECRET_KEY', 'a' * 40)
+    monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg2://user:pass@host:5432/db')
+
+    for bad_token in [None, '', 'medioptim-kiosk-display-token-2025', 'kiosk-token', 'default']:
+        if bad_token is None:
+            monkeypatch.delenv('KIOSK_VIEW_TOKEN', raising=False)
+        else:
+            monkeypatch.setenv('KIOSK_VIEW_TOKEN', bad_token)
+        with pytest.raises(ValueError) as exc:
+            get_config('production')
+        assert 'KIOSK_VIEW_TOKEN' in str(exc.value)
+
+    # In production with strong token: succeeds
+    monkeypatch.setenv('KIOSK_VIEW_TOKEN', 'super-strong-production-token-1234567890')
+    cfg = get_config('production')
+    assert cfg.KIOSK_VIEW_TOKEN == 'super-strong-production-token-1234567890'
+
+
+def test_kiosk_rejects_default_known_token(kiosk_client):
+    """Requests using the old public placeholder token must be rejected with 401."""
+    res = kiosk_client.get('/api/queue-display/feed?token=medioptim-kiosk-display-token-2025')
+    assert res.status_code == 401
+

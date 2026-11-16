@@ -1,15 +1,13 @@
 {
   "$schema": "https://pg-language-server.com/latest/schema.json",
-  // Database configuration for Supabase PostgreSQL
+  // Database configuration:
+  // Connection details (PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD) are read
+  // dynamically from environment variables to avoid exposing project references in public repos.
   "db": {
-    "host": "aws-0-eu-west-2.pooler.supabase.com",
-    "port": 5432,
-    "database": "postgres",
-    "username": "postgres.vnoonkhiqnggtbtaqhqz",
     "connTimeoutSecs": 15,
     "disableConnection": false,
-    // Database password is read securely via the PGPASSWORD environment variable.
-    // Do NOT hardcode credentials in this file.
+    // Database credentials and connection parameters are resolved from standard environment variables:
+    // PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD (or DATABASE_URL).
     //
     // Safety guard: Statement execution is strictly disabled against remote production databases.
     // Only local targets would be permitted if specified (e.g. 127.0.0.1/*).

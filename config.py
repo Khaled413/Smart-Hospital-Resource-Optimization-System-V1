@@ -5,6 +5,7 @@ Supabase PostgreSQL connection pooling (NullPool, transaction mode port 6543), a
 """
 
 import os
+import secrets
 from datetime import timedelta
 from urllib.parse import quote_plus
 from sqlalchemy.pool import NullPool
@@ -80,7 +81,9 @@ class Config:
     APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'Africa/Cairo')
     
     # Public Waiting Hall Kiosk Display Token (Read-Only)
-    KIOSK_VIEW_TOKEN = os.environ.get('KIOSK_VIEW_TOKEN', 'medioptim-kiosk-display-token-2025')
+    # In production, must be explicitly configured with a strong secret.
+    # In dev/testing, uses an ephemeral random token if unset.
+    KIOSK_VIEW_TOKEN = os.environ.get('KIOSK_VIEW_TOKEN') or secrets.token_urlsafe(32)
     
     # Demo Mode (Restricted read-only demo viewer)
     DEMO_MODE = os.environ.get('DEMO_MODE', 'false').lower() in ('true', '1', 'yes')
@@ -168,5 +171,19 @@ def get_config(env_name=None):
                 "CRITICAL DATABASE CONFIGURATION ERROR: "
                 f"'DATABASE_URL' must be a valid PostgreSQL connection string in production, got: {prod_db_url[:12]}..."
             )
+
+        prod_kiosk_token = os.environ.get('KIOSK_VIEW_TOKEN')
+        insecure_kiosk_tokens = {
+            None, '', 'medioptim-kiosk-display-token-2025', 'kiosk-token', 'default',
+            'change-this-in-production'
+        }
+        if not prod_kiosk_token or prod_kiosk_token.strip() in insecure_kiosk_tokens:
+            raise ValueError(
+                "CRITICAL SECURITY CONFIGURATION ERROR: "
+                "In production mode, the 'KIOSK_VIEW_TOKEN' environment variable must be explicitly defined "
+                "and cannot use a known default or placeholder value. Generate a secure token via: "
+                "python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        cfg_class.KIOSK_VIEW_TOKEN = prod_kiosk_token.strip()
 
     return cfg_class
