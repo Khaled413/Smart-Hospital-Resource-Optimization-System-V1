@@ -67,11 +67,7 @@ def test_endpoints_default_to_today_in_app_tz(client):
         with app.app_context():
             appt_id = em_data['emergency_appointment']['id']
             pat_id = em_data['emergency_appointment']['patient_id']
-            appt = db.session.get(Appointment, appt_id)
-            if appt:
-                db.session.delete(appt)
+            Appointment.query.filter_by(id=appt_id).delete()
             from models import Patient
-            pat = db.session.get(Patient, pat_id)
-            if pat:
-                db.session.delete(pat)
+            Patient.query.filter_by(id=pat_id).delete()
             db.session.commit()

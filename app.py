@@ -1557,6 +1557,9 @@ def api_optimize():
             'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0, 'utilization_rate': 0.0, 'avg_wait_time': 0.0},
             'assignments': [],
             'unassigned': [],
+            'unassigned_details': [],
+            'skipped_count': 0,
+            'skipped_reasons': {},
             'log': [f'ℹ️ All eligible patients are already scheduled for {target_date}. To reschedule, enable clear existing appointments.']
         })
 
@@ -1573,6 +1576,9 @@ def api_optimize():
             'metrics': {'total': 0, 'assigned': 0, 'unassigned': 0, 'utilization_rate': 0.0, 'avg_wait_time': 0.0},
             'assignments': [],
             'unassigned': [],
+            'unassigned_details': [],
+            'skipped_count': 0,
+            'skipped_reasons': {},
             'log': [f'ℹ️ No eligible unscheduled patients available for {target_date}. To reschedule, enable clear existing appointments.']
         })
 
@@ -1655,6 +1661,9 @@ def api_optimize():
         'metrics': result['metrics'],
         'assignments': assignments_out,
         'unassigned': unassigned_out,
+        'unassigned_details': result.get('unassigned_details', []),
+        'skipped_count': result.get('skipped_count', len(unassigned_out)),
+        'skipped_reasons': result.get('skipped_reasons', {}),
         'log': result['log']
     })
 
@@ -1674,11 +1683,18 @@ def api_run_simulation():
     doctors = Doctor.query.all()
     rooms = Room.query.all()
 
+    existing_appts = Appointment.query.filter_by(date=target_date).all()
+    eligible_patients = [
+        p for p in patients
+        if not p.preferred_date or p.preferred_date == target_date
+    ]
+
     res = run_scenario_simulation(
-        patients, doctors, rooms, target_date,
+        eligible_patients, doctors, rooms, target_date,
         absent_doctor_ids=absent_doctor_ids,
         disabled_room_ids=disabled_room_ids,
-        patient_surge_percent=patient_surge_percent
+        patient_surge_percent=patient_surge_percent,
+        existing_appointments=existing_appts
     )
 
     log_audit('SIMULATE', 'simulation', None, f"Crisis simulation run (surge={patient_surge_percent}%, absent_docs={len(absent_doctor_ids)})")
