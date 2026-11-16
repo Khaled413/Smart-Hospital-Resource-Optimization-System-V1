@@ -206,7 +206,7 @@ async function fetchQueue() {
   try {
     const res = await fetch('/api/appointments');
     const appts = await res.json();
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayISO();
     const todayAppts = appts.filter(a => a.date === today && a.status !== 'cancelled');
 
     const serving = todayAppts.slice(0, 6);

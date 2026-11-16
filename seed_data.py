@@ -6,7 +6,7 @@ Seeds Roles & Permissions (Dynamic RBAC), Users, Departments, Doctors, Rooms, Be
 from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment, User,
     Appointment, OptimizationRun, Permission, Role, UserPermissionOverride, utc_now,
-    generate_secure_temporary_password, format_doctor_name
+    generate_secure_temporary_password, format_doctor_name, today_in_app_tz, now_in_app_tz
 )
 from permissions import PERMISSION_CATALOG, DEFAULT_ROLE_PERMISSIONS
 from optimizer import predict_no_show_risk
@@ -293,7 +293,7 @@ def seed_base_data(roles_by_name):
         db.session.add(bed)
 
     # ── 7. Patients with Clinical Vitals & Triage ─────────────────────────────
-    today = date.today().isoformat()
+    today = today_in_app_tz()
     patients_data = [
         {"name": "Alice Johnson",    "age": 45, "gender": "Female", "priority": "critical", "spec": "Cardiology",      "condition": "Severe acute chest pain radiating to left arm, ST elevation suspected", "triage": 1, "bp": "165/105", "hr": 112, "spo2": 93, "temp": 37.1},
         {"name": "Bob Martinez",     "age": 62, "gender": "Male",   "priority": "urgent",   "spec": "Neurology",       "condition": "Acute recurring migraine with hemiparesis and visual blur",              "triage": 2, "bp": "145/92",  "hr": 88,  "spo2": 97, "temp": 36.9},
@@ -351,18 +351,7 @@ def seed_appointments_and_runs():
     print("[SEED] Seeding realistic hospital appointments and telemetry...")
     
     # Resolve current date in configured timezone
-    try:
-        from config import Config
-        tz_name = getattr(Config, 'APP_TIMEZONE', 'Africa/Cairo')
-    except Exception:
-        tz_name = 'Africa/Cairo'
-    try:
-        import pytz
-        tz = pytz.timezone(tz_name)
-        now_dt = datetime.now(tz)
-    except Exception:
-        now_dt = datetime.now()
-
+    now_dt = now_in_app_tz()
     today_str = now_dt.strftime('%Y-%m-%d')
     yesterday_str = (now_dt - timedelta(days=1)).strftime('%Y-%m-%d')
     tomorrow_str = (now_dt + timedelta(days=1)).strftime('%Y-%m-%d')

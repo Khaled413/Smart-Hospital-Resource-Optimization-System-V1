@@ -6,6 +6,8 @@ Includes Users, RBAC, Beds, Equipment, Triage Vitals, and Audit Logs.
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import validates
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import os
 import secrets
 import re
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,8 +16,30 @@ db = SQLAlchemy()
 
 
 def utc_now():
-    """Return timezone-aware current UTC datetime."""
+    """Return timezone-aware current UTC datetime for database columns."""
     return datetime.now(timezone.utc)
+
+
+def get_app_timezone_name() -> str:
+    """Return configured application timezone name (defaults to Africa/Cairo)."""
+    return os.environ.get('APP_TIMEZONE', 'Africa/Cairo')
+
+
+def now_in_app_tz(tz_name: str | None = None) -> datetime:
+    """Return timezone-aware current datetime in APP_TIMEZONE (Africa/Cairo)."""
+    try:
+        tz = ZoneInfo(tz_name or get_app_timezone_name())
+    except Exception:
+        tz = ZoneInfo('Africa/Cairo')
+    return datetime.now(tz)
+
+
+def today_in_app_tz(tz_name: str | None = None) -> str:
+    """
+    Return today's date string (YYYY-MM-DD) in APP_TIMEZONE (Africa/Cairo).
+    DB timestamps remain UTC timestamptz.
+    """
+    return now_in_app_tz(tz_name).strftime('%Y-%m-%d')
 
 
 COMMON_INSECURE_PASSWORDS = {
@@ -355,7 +379,7 @@ class Doctor(db.Model):
 
     def to_dict(self, appointments_today=None):
         if appointments_today is None:
-            today_iso = datetime.now(timezone.utc).date().isoformat()
+            today_iso = today_in_app_tz()
             appointments_today = Appointment.query.filter(
                 Appointment.doctor_id == self.id,
                 Appointment.date == today_iso,

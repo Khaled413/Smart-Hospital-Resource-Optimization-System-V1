@@ -25,7 +25,8 @@ from models import (
     db, Department, Doctor, Patient, Room, Bed, Equipment,
     Appointment, OptimizationRun, User, AuditLog,
     Permission, Role, UserPermissionOverride, role_permissions, mask_patient_name, utc_now,
-    validate_password_complexity, generate_secure_temporary_password, format_doctor_name
+    validate_password_complexity, generate_secure_temporary_password, format_doctor_name,
+    today_in_app_tz, now_in_app_tz
 )
 from permissions import (
     PERMISSION_CATALOG, PERMISSION_MAP, PERMISSION_GROUPS,
@@ -173,17 +174,15 @@ from zoneinfo import ZoneInfo
 
 
 def get_current_datetime():
-    """Return timezone-aware current datetime based on APP_TIMEZONE."""
+    """Return timezone-aware current datetime based on APP_TIMEZONE (Africa/Cairo)."""
     tz_str = app.config.get('APP_TIMEZONE', 'Africa/Cairo') if app else 'Africa/Cairo'
-    try:
-        return datetime.now(ZoneInfo(tz_str))
-    except Exception:
-        return datetime.now()
+    return now_in_app_tz(tz_str)
 
 
 def get_current_date():
-    """Return current date string YYYY-MM-DD in configured timezone."""
-    return get_current_datetime().strftime('%Y-%m-%d')
+    """Return current date string YYYY-MM-DD in APP_TIMEZONE (Africa/Cairo)."""
+    tz_str = app.config.get('APP_TIMEZONE', 'Africa/Cairo') if app else 'Africa/Cairo'
+    return today_in_app_tz(tz_str)
 
 
 def get_current_user():
@@ -481,7 +480,8 @@ def inject_rbac_helpers():
         can=can,
         can_any=can_any,
         user_permissions=sorted(list(user_perms)),
-        format_doctor_name=format_doctor_name
+        format_doctor_name=format_doctor_name,
+        today_in_app_tz=today_in_app_tz
     )
 
 
@@ -1419,7 +1419,7 @@ def api_emergency_walkin():
     age = safe_int(data.get('age'), 40)
     gender = data.get('gender', 'Unknown')
     condition = data.get('condition_description', 'Acute Code Red Walk-in')
-    today_iso = date.today().isoformat()
+    today_iso = today_in_app_tz()
 
     # 1. Register emergency patient immediately
     patient = Patient(
@@ -1514,7 +1514,7 @@ def api_emergency_walkin():
 def api_optimize():
     data = request.get_json() or {}
     algorithm = data.get('algorithm', 'hybrid')
-    target_date = data.get('date', date.today().isoformat())
+    target_date = data.get('date') or today_in_app_tz()
     clear_existing = data.get('clear_existing', False)
 
     patients = Patient.query.all()
@@ -1648,7 +1648,7 @@ def api_optimize():
 @require_permission('simulation.run')
 def api_run_simulation():
     data = request.get_json() or {}
-    target_date = data.get('date', date.today().isoformat())
+    target_date = data.get('date') or today_in_app_tz()
     absent_doctor_ids = data.get('absent_doctor_ids', [])
     disabled_room_ids = data.get('disabled_room_ids', [])
     patient_surge_percent = int(data.get('patient_surge_percent', 0))
@@ -1687,7 +1687,7 @@ def api_analytics_wait_time():
 @app.route('/api/analytics/utilization')
 @require_permission('analytics.view')
 def api_analytics_utilization():
-    target_date = request.args.get('date', date.today().isoformat())
+    target_date = request.args.get('date') or today_in_app_tz()
     doctors = Doctor.query.all()
     util_data = []
     for doc in doctors:
@@ -1745,7 +1745,7 @@ def sanitize_csv_cell(val):
 @app.route('/api/export/appointments/csv')
 @require_permission('export.csv')
 def export_appointments_csv():
-    target_date = request.args.get('date', date.today().isoformat())
+    target_date = request.args.get('date') or today_in_app_tz()
     appts = Appointment.query.filter_by(date=target_date).order_by(Appointment.start_time).all()
 
     output = io.StringIO()
