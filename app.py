@@ -39,6 +39,7 @@ from optimizer import (
     time_to_minutes, minutes_to_time
 )
 from seed_data import seed_database
+from metrics_service import MetricsService
 
 # ─── App Factory / Configuration ──────────────────────────────────────────────
 
@@ -811,73 +812,8 @@ def api_update_profile():
 @app.route('/api/dashboard')
 @require_permission('dashboard.view')
 def api_dashboard():
-    today = get_current_date()
-    total_patients = Patient.query.count()
-    total_doctors = Doctor.query.count()
-    total_rooms = Room.query.count()
-    total_depts = Department.query.count()
-    total_beds = Bed.query.count()
-    occupied_beds = Bed.query.filter_by(status='occupied').count()
-    total_equipment = Equipment.query.count()
-    avail_equipment = Equipment.query.filter_by(status='available').count()
-
-    appointments_today = Appointment.query.filter_by(date=today).count()
-    emergencies_today = Appointment.query.filter_by(date=today, is_emergency=True).count()
-
-    today_appts = Appointment.query.filter_by(date=today).all()
-    avg_wait = (sum(a.waiting_time for a in today_appts) / len(today_appts)) if today_appts else 0
-
-    doctors = Doctor.query.all()
-    total_avail_minutes = sum(
-        (time_to_minutes(d.available_until) - time_to_minutes(d.available_from))
-        for d in doctors
-    )
-    scheduled_today_appts = Appointment.query.filter_by(date=today, status='scheduled').all()
-    booked_today_minutes = sum(a.duration_minutes for a in scheduled_today_appts)
-    utilization = round((booked_today_minutes / total_avail_minutes * 100), 1) if total_avail_minutes > 0 else 0
-
-    priority_dist = dict(
-        db.session.query(Patient.priority, db.func.count(Patient.id))
-        .group_by(Patient.priority).all()
-    )
-
-    dept_counts = (
-        db.session.query(Department.name, db.func.count(Appointment.id))
-        .join(Doctor, Doctor.department_id == Department.id)
-        .join(Appointment, Appointment.doctor_id == Doctor.id)
-        .group_by(Department.name).all()
-    )
-    dept_workload = {name: count for name, count in dept_counts}
-
-    doc_today_counts = dict(
-        db.session.query(Appointment.doctor_id, db.func.count(Appointment.id))
-        .filter(Appointment.date == today)
-        .group_by(Appointment.doctor_id).all()
-    )
-    doctor_util = []
-    for doc in doctors:
-        booked = doc_today_counts.get(doc.id, 0)
-        util_pct = round((booked / doc.max_patients_per_day) * 100, 1) if doc.max_patients_per_day else 0
-        doctor_util.append({'name': doc.name, 'utilization': util_pct, 'booked': booked, 'spec': doc.specialization})
-
-    return jsonify({
-        'total_patients': total_patients,
-        'total_doctors': total_doctors,
-        'total_rooms': total_rooms,
-        'total_departments': total_depts,
-        'total_beds': total_beds,
-        'occupied_beds': occupied_beds,
-        'bed_occupancy_rate': round((occupied_beds / total_beds * 100), 1) if total_beds > 0 else 0,
-        'total_equipment': total_equipment,
-        'available_equipment': avail_equipment,
-        'appointments_today': appointments_today,
-        'emergencies_today': emergencies_today,
-        'avg_wait_time': round(avg_wait, 1),
-        'utilization_rate': utilization,
-        'priority_distribution': priority_dist,
-        'department_workload': dept_workload,
-        'doctor_utilization': doctor_util
-    })
+    target_date = request.args.get('date') or today_in_app_tz()
+    return jsonify(MetricsService.get_dashboard_summary(target_date))
 
 
 # ─── API: Patients ────────────────────────────────────────────────────────────
@@ -1688,33 +1624,14 @@ def api_analytics_wait_time():
 @require_permission('analytics.view')
 def api_analytics_utilization():
     target_date = request.args.get('date') or today_in_app_tz()
-    doctors = Doctor.query.all()
-    util_data = []
-    for doc in doctors:
-        avail_mins = time_to_minutes(doc.available_until) - time_to_minutes(doc.available_from)
-        total_slots = avail_mins // 30
-        doc_appts = Appointment.query.filter_by(doctor_id=doc.id, date=target_date, status='scheduled').all()
-        booked_mins = sum(a.duration_minutes for a in doc_appts)
-        util_pct = round((booked_mins / avail_mins * 100), 1) if avail_mins > 0 else 0
-        util_data.append({
-            'doctor': doc.name,
-            'specialization': doc.specialization,
-            'booked': len(doc_appts),
-            'booked_minutes': booked_mins,
-            'total_slots': total_slots,
-            'utilization': min(util_pct, 100)
-        })
-    return jsonify(util_data)
+    return jsonify(MetricsService.get_doctor_utilization(target_date))
 
 
 @app.route('/api/analytics/patients-status')
 @require_permission('analytics.view')
 def api_analytics_patients_status():
-    all_patients = Patient.query.all()
-    assigned_ids = {a.patient_id for a in Appointment.query.filter_by(status='scheduled').all()}
-    assigned = len([p for p in all_patients if p.id in assigned_ids])
-    unassigned = len(all_patients) - assigned
-    return jsonify({'assigned': assigned, 'unassigned': unassigned})
+    target_date = request.args.get('date')
+    return jsonify(MetricsService.get_patient_status_counts(target_date))
 
 
 @app.route('/api/optimization-runs')
