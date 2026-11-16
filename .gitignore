@@ -57,5 +57,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Node & CLI dependencies
+node_modules/
+supabase/.temp/
+
 # Vercel
 .vercel/

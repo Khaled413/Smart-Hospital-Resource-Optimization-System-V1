@@ -128,6 +128,19 @@
 {% block content %}
 <div class="profile-container">
 
+  <!-- Mandatory Password Change Banner (Shown when must_change_password is True) -->
+  <div id="mandatory-password-banner" style="display:none;background:#fef2f2;border:1px solid #fecaca;border-left:5px solid #ef4444;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
+    <div style="display:flex;align-items:flex-start;gap:14px;">
+      <span style="font-size:24px;">⚠️</span>
+      <div>
+        <h4 style="margin:0;font-size:16px;font-weight:700;color:#991b1b;">Password Change Mandatory</h4>
+        <p style="margin:4px 0 0 0;font-size:13px;color:#7f1d1d;line-height:1.5;">
+          You are currently signed in with a temporary or reset password. You must change your password to a strong password (minimum 12 characters, including uppercase, lowercase, numbers, and symbols) to access hospital optimization features.
+        </p>
+      </div>
+    </div>
+  </div>
+
   <!-- Hospital Staff Header Banner -->
   <div class="profile-header-card">
     <div class="profile-avatar-circle" id="profile-avatar">
@@ -216,9 +229,9 @@
           </div>
 
           <div class="form-group" style="margin-bottom:14px;">
-            <label class="form-label">New Password * (Min 8 characters)</label>
+            <label class="form-label">New Password * (Min 12 characters)</label>
             <div class="password-field-wrap">
-              <input class="form-control" type="password" id="pwd-new" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password">
+              <input class="form-control" type="password" id="pwd-new" required minlength="12" placeholder="At least 12 characters with letters, numbers & symbols" autocomplete="new-password">
               <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('pwd-new', this)" title="Show password" aria-label="Show password">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
               </button>
@@ -228,7 +241,7 @@
           <div class="form-group" style="margin-bottom:20px;">
             <label class="form-label">Confirm New Password *</label>
             <div class="password-field-wrap">
-              <input class="form-control" type="password" id="pwd-confirm" required minlength="8" placeholder="Re-enter new password" autocomplete="new-password">
+              <input class="form-control" type="password" id="pwd-confirm" required minlength="12" placeholder="Re-enter new password" autocomplete="new-password">
               <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('pwd-confirm', this)" title="Show password" aria-label="Show password">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
               </button>
@@ -307,6 +320,16 @@ async function loadProfile() {
         docTag.textContent = '';
       }
     }
+
+    if (currentUserData.must_change_password || window.location.search.includes('password_change_required')) {
+      const banner = document.getElementById('mandatory-password-banner');
+      if (banner) banner.style.display = 'block';
+      const pwdField = document.getElementById('pwd-new');
+      if (pwdField) pwdField.focus();
+    } else {
+      const banner = document.getElementById('mandatory-password-banner');
+      if (banner) banner.style.display = 'none';
+    }
   } catch(err) {
     ToastManager.show(err.message || 'Error loading profile', 'error');
   }
@@ -347,8 +370,8 @@ async function handlePasswordChange(e) {
     ToastManager.show('New passwords do not match!', 'error');
     return;
   }
-  if (newPwd.length < 8) {
-    ToastManager.show('Password must be at least 8 characters long!', 'error');
+  if (newPwd.length < 12) {
+    ToastManager.show('Password must be at least 12 characters long and include upper, lower, numbers, and symbols.', 'error');
     return;
   }
 
@@ -362,6 +385,11 @@ async function handlePasswordChange(e) {
     });
     ToastManager.show(res.message || 'Password updated successfully!', 'success');
     document.getElementById('change-pwd-form').reset();
+    const banner = document.getElementById('mandatory-password-banner');
+    if (banner) banner.style.display = 'none';
+    if (window.location.search.includes('password_change_required')) {
+      setTimeout(() => { window.location.href = '/'; }, 1200);
+    }
   } catch(err) {
     ToastManager.show(err.message || 'Failed to update password', 'error');
   } finally {

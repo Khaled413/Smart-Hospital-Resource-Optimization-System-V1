@@ -33,9 +33,19 @@ def setup_test_db():
         seed_database()
         # Reset test state isolation
         UserPermissionOverride.query.delete()
+        passwords = {
+            'admin': 'Admin#2025!',
+            'manager': 'Manager#2025!',
+            'dr_sarah': 'Doctor#2025!',
+            'receptionist': 'Reception#2025!',
+            'demo_viewer': 'DemoViewer#2025!'
+        }
         for u in User.query.all():
             u.failed_login_attempts = 0
             u.locked_until = None
+            u.must_change_password = False
+            if u.username in passwords:
+                u.set_password(passwords[u.username])
         db.session.commit()
         yield
 

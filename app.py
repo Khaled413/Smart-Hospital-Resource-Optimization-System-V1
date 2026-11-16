@@ -9,6 +9,8 @@ from datetime import datetime, date, timedelta, timezone
 import csv
 import io
 import os
+import re
+import hashlib
 import secrets
 from functools import wraps
 
@@ -152,6 +154,76 @@ def add_security_headers(response):
     return response
 
 
+# ─── Password Security & Complexity Helpers ───────────────────────────────────
+
+COMMON_INSECURE_PASSWORDS = {
+    'password', 'password123', 'admin', 'admin123', 'hospital',
+    'hospital123', 'doctor', 'doctor123', 'nurse', 'reception',
+    'manager', 'medicare', '123456789012', 'qwertyuiopas', 'welcome12345'
+}
+
+
+def validate_password_complexity(password: str, user=None) -> tuple[bool, str | None]:
+    """
+    Validate password complexity:
+    - Minimum length: 12 characters.
+    - Requires at least one uppercase letter, one lowercase letter, one digit, and one special symbol.
+    - Rejects common patterns, predictable repetitions, sequences, and personal identifier leaks.
+    """
+    if not password or len(password) < 12:
+        return False, "Password must be at least 12 characters long."
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter (A-Z)."
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter (a-z)."
+    if not re.search(r'\d', password):
+        return False, "Password must contain at least one digit (0-9)."
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{}|;:,.<>?~`]', password):
+        return False, "Password must contain at least one special character (e.g. !@#$%^&*)."
+    if re.search(r'(.)\1{3,}', password):
+        return False, "Password contains too many repeated consecutive characters."
+
+    lower_pwd = password.lower()
+    common_sequences = ['123456', '654321', '234567', '765432', 'abcdef', 'qwerty', 'asdfgh', 'zxcvbn']
+    for seq in common_sequences:
+        if seq in lower_pwd:
+            return False, f"Password cannot contain simple keyboard sequences like '{seq}'."
+
+    for word in COMMON_INSECURE_PASSWORDS:
+        if word in lower_pwd:
+            return False, "Password contains common or predictable words."
+
+    if user:
+        uname = (getattr(user, 'username', '') or '').lower()
+        if len(uname) >= 3 and uname in lower_pwd:
+            return False, "Password cannot contain your username."
+        email = (getattr(user, 'email', '') or '').lower()
+        email_prefix = email.split('@')[0] if '@' in email else ''
+        if len(email_prefix) >= 3 and email_prefix in lower_pwd:
+            return False, "Password cannot contain your email identifier."
+
+    return True, None
+
+
+def generate_secure_temporary_password(length=14) -> str:
+    """Generate a cryptographically secure temporary password exceeding minimum complexity requirements."""
+    chars_upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    chars_lower = "abcdefghijkmnopqrstuvwxyz"
+    chars_digits = "23456789"
+    chars_symbols = "!@#$%^&*()_+-="
+    all_chars = chars_upper + chars_lower + chars_digits + chars_symbols
+
+    pwd = [
+        secrets.choice(chars_upper), secrets.choice(chars_upper),
+        secrets.choice(chars_lower), secrets.choice(chars_lower),
+        secrets.choice(chars_digits), secrets.choice(chars_digits),
+        secrets.choice(chars_symbols), secrets.choice(chars_symbols),
+    ]
+    pwd += [secrets.choice(all_chars) for _ in range(max(0, length - len(pwd)))]
+    secrets.SystemRandom().shuffle(pwd)
+    return ''.join(pwd)
+
+
 # ─── Auth & Security Helpers ──────────────────────────────────────────────────
 
 def safe_int(val, default=0):
@@ -184,19 +256,76 @@ def get_current_date():
 
 
 def get_current_user():
-    """Return the currently authenticated User instance or None."""
+    """
+    Return the currently authenticated User instance or None.
+    Invalidates session immediately if password has been changed or reset elsewhere.
+    """
     user_id = session.get('user_id')
     if not user_id:
         g.current_user = None
         return None
+
     if getattr(g, 'current_user', None) and getattr(g.current_user, 'id', None) == user_id:
+        # Check password hash synchronization to invalidate concurrent sessions
+        pwd_hash = session.get('pwd_hash')
+        if pwd_hash and g.current_user.password_hash:
+            curr_hash = hashlib.sha256(g.current_user.password_hash.encode()).hexdigest()[:16]
+            if pwd_hash != curr_hash:
+                session.clear()
+                g.current_user = None
+                return None
         return g.current_user
+
     user = db.session.get(User, user_id)
     if not user or not user.is_active:
         g.current_user = None
         return None
+
+    # Verify session password digest against database password_hash
+    pwd_hash = session.get('pwd_hash')
+    if pwd_hash and user.password_hash:
+        curr_hash = hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
+        if pwd_hash != curr_hash:
+            session.clear()
+            g.current_user = None
+            return None
+
     g.current_user = user
     return user
+
+
+@app.before_request
+def enforce_must_change_password():
+    """
+    Intercept all authenticated requests for users flagged with must_change_password=True.
+    Forces redirect to Profile Settings until a compliant password is created.
+    """
+    user = get_current_user()
+    if not user or not getattr(user, 'must_change_password', False):
+        return None
+
+    # Whitelisted routes while password change is pending
+    allowed_exact = {
+        '/profile',
+        '/change-password',
+        '/api/auth/change-password',
+        '/api/auth/logout',
+        '/api/user/profile',
+        '/login',
+        '/api/auth/login',
+        '/favicon.ico'
+    }
+    if request.path in allowed_exact or request.path.startswith('/static/'):
+        return None
+
+    if request.path.startswith('/api/'):
+        return jsonify({
+            'error': 'PasswordChangeRequired',
+            'message': 'You must change your temporary password before accessing the system.',
+            'redirect': '/profile'
+        }), 403
+
+    return redirect(url_for('profile_page', password_change_required=1))
 
 
 def get_user_effective_permissions(user):
@@ -451,7 +580,10 @@ def index():
 
 @app.route('/login')
 def login_page():
-    if 'user_id' in session and get_current_user():
+    user = get_current_user()
+    if user:
+        if getattr(user, 'must_change_password', False):
+            return redirect(url_for('profile_page', password_change_required=1))
         return redirect(url_for('index'))
     return render_template('login.html')
 
@@ -614,9 +746,16 @@ def api_login():
     session['username'] = user.username
     session['role'] = user.role
     session['full_name'] = user.full_name or user.username
+    session['pwd_hash'] = hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
 
     log_audit('LOGIN', 'user', user.id, f"User {user.username} logged in successfully")
-    return jsonify({'message': 'Logged in successfully', 'user': user.to_dict()})
+    redirect_target = '/profile' if user.must_change_password else '/'
+    return jsonify({
+        'message': 'Logged in successfully',
+        'must_change_password': user.must_change_password,
+        'redirect': redirect_target,
+        'user': user.to_dict()
+    })
 
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -647,6 +786,7 @@ api_me._permission_protected = True
 
 
 @app.route('/api/auth/change-password', methods=['POST'])
+@limiter.limit("5 per minute", key_func=get_remote_address)
 @login_required
 def api_change_password():
     user = get_current_user()
@@ -663,14 +803,24 @@ def api_change_password():
     if not user.check_password(old_password):
         return jsonify({'error': 'Current password is incorrect'}), 400
 
-    if len(new_password) < 8:
-        return jsonify({'error': 'New password must be at least 8 characters long'}), 400
+    if old_password == new_password:
+        return jsonify({'error': 'New password must be different from current password'}), 400
+
+    is_valid, err_msg = validate_password_complexity(new_password, user=user)
+    if not is_valid:
+        return jsonify({'error': 'WeakPassword', 'message': err_msg}), 400
 
     user.set_password(new_password)
     user.must_change_password = False
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.permissions_version = (user.permissions_version or 1) + 1
     db.session.commit()
 
-    log_audit('PASSWORD_CHANGE', 'user', user.id, f"User {user.username} updated password")
+    # Synchronize current session's password hash so it remains valid while invalidating other sessions
+    session['pwd_hash'] = hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
+
+    log_audit('PASSWORD_CHANGE', 'user', user.id, f"User {user.username} successfully updated password")
     return jsonify({
         'message': 'Password updated successfully',
         'must_change_password': False
@@ -690,7 +840,7 @@ def api_get_profile():
             'id': user.doctor.id,
             'name': user.doctor.name,
             'specialization': user.doctor.specialization,
-            'department_name': user.doctor.department.name if user.doctor.department else ''
+            'department_name': user.doctor.dept.name if (user.doctor and user.doctor.dept) else ''
         }
     return jsonify({'success': True, 'user': data})
 
@@ -1874,8 +2024,10 @@ def api_create_user():
 
     if not username or not email or not password:
         return jsonify({'error': 'Username, email, and password are required'}), 400
-    if len(password) < 8:
-        return jsonify({'error': 'Password must be at least 8 characters long'}), 400
+
+    is_valid, err_msg = validate_password_complexity(password)
+    if not is_valid:
+        return jsonify({'error': 'WeakPassword', 'message': err_msg}), 400
 
     if User.query.filter_by(username=username).first():
         return jsonify({'error': f"Username '{username}' is already taken"}), 409
@@ -1976,6 +2128,42 @@ def api_toggle_user_status(uid):
     db.session.commit()
 
     return jsonify(target_user.to_dict(include_permissions=True))
+
+
+@app.route('/api/users/<int:uid>/reset-password', methods=['POST'])
+@require_permission('users.manage')
+def api_reset_user_password(uid):
+    """
+    Administrator action to generate a one-time random temporary password for a staff member.
+    Enforces must_change_password=True, resets lockouts, and writes audit logs.
+    """
+    current_admin = get_current_user()
+    ok, err_msg = verify_step_up_auth(current_admin)
+    if not ok:
+        return jsonify({'error': 'StepUpAuthRequired', 'message': err_msg}), 401
+
+    target_user = db.get_or_404(User, uid)
+    temp_password = generate_secure_temporary_password(14)
+    target_user.set_password(temp_password)
+    target_user.must_change_password = True
+    target_user.failed_login_attempts = 0
+    target_user.locked_until = None
+    target_user.permissions_version = (target_user.permissions_version or 1) + 1
+    db.session.commit()
+
+    log_audit(
+        'PASSWORD_RESET_ADMIN',
+        'user',
+        target_user.id,
+        f"Administrator {current_admin.username} reset password for {target_user.username}"
+    )
+
+    return jsonify({
+        'message': f"Temporary password generated for {target_user.username}. Share it with the user securely. It will be shown only once.",
+        'temporary_password': temp_password,
+        'user_id': target_user.id,
+        'username': target_user.username
+    }), 200
 
 
 @app.route('/api/users/<int:uid>/overrides', methods=['POST'])

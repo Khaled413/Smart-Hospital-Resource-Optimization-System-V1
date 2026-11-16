@@ -246,6 +246,11 @@ class Doctor(db.Model):
     # Relationships
     appointments = db.relationship('Appointment', backref='doctor', lazy=True)
 
+    @property
+    def department(self):
+        """Compatibility property alias for department relationship (backref 'dept')."""
+        return self.dept
+
     def to_dict(self, appointments_today=None):
         if appointments_today is None:
             today_iso = datetime.now(timezone.utc).date().isoformat()
