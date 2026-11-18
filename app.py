@@ -1609,13 +1609,18 @@ def api_optimize():
             'log': [f'ℹ️ All eligible patients are already scheduled for {target_date}. To reschedule, enable clear existing appointments.']
         })
 
-    # Filter patients with target_date or unassigned preferred_date
+    # Filter patients with target_date or unassigned/overdue preferred_date
     patients_to_schedule = [
         p for p in unscheduled_patients
-        if not p.preferred_date or p.preferred_date == target_date
+        if not p.preferred_date or p.preferred_date <= target_date
     ]
 
     if not patients_to_schedule:
+        hint = (
+            f"No unscheduled patients with preferred date on or before {target_date} found in queue."
+            if clear_existing else
+            f"No eligible unscheduled patients available for {target_date}. To reschedule, enable clear existing appointments."
+        )
         return jsonify({
             'status': 'warning',
             'message': f'No eligible unscheduled patients available for {target_date}.',
@@ -1625,7 +1630,7 @@ def api_optimize():
             'unassigned_details': [],
             'skipped_count': 0,
             'skipped_reasons': {},
-            'log': [f'ℹ️ No eligible unscheduled patients available for {target_date}. To reschedule, enable clear existing appointments.']
+            'log': [f'ℹ️ {hint}']
         })
 
     try:

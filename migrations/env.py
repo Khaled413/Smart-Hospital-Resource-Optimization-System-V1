@@ -16,10 +16,12 @@ logger = logging.getLogger('alembic.env')
 
 
 def get_engine():
-    migration_url = current_app.config.get('MIGRATION_DATABASE_URL')
+    import os
+    migration_url = current_app.config.get('MIGRATION_DATABASE_URI') or current_app.config.get('MIGRATION_DATABASE_URL') or os.environ.get('MIGRATION_DATABASE_URL')
     if migration_url:
         from sqlalchemy import create_engine
-        return create_engine(migration_url)
+        from config import normalize_database_url
+        return create_engine(normalize_database_url(migration_url))
     try:
         # this works with Flask-SQLAlchemy<3 and Alchemical
         return current_app.extensions['migrate'].db.get_engine()
